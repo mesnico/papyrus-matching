@@ -9,10 +9,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, DataLoader
-from torchvision import transforms
+from torchvision import models, transforms, utils
 import torchmetrics.functional as tm
 
 from dataloader import PapyrMatchesDataset
+
+
+def collate_fn(batch):
+
+    def _common(batch, direction):
+        dir_batch = [i for i in batch if i[2].direction == direction]
+        A = [i[0] for i in dir_batch]
+        B = [i[1] for i in dir_batch]
+        matches = [i[2] for i in dir_batch]
+
+        A = torch.stack(A) if A else torch.tensor([])
+        B = torch.stack(B) if B else torch.tensor([])
+        return A, B, matches
+
+    hA, hB, hmatches = _common(batch, 'horizontal')
+    vA, vB, vmatches = _common(batch, 'vertical')
+    return hA, hB, hmatches, vA, vB, vmatches
 
 
 class PapyriMatchesDataModule(pl.LightningDataModule):
@@ -35,16 +52,14 @@ class PapyriMatchesDataModule(pl.LightningDataModule):
         n_train = round(n_images * 0.50)
         n_valid = round(n_images * 0.25)
         n_test  = n_images - n_train - n_valid
-        
+
         train_image_paths = image_paths[:n_train]
         valid_image_paths = image_paths[n_train:n_train + n_valid]
         test_image_paths  = image_paths[-n_test:]
 
         common = dict(
-            patch_size=64,
-            stride=64,
-            rows=1,
-            cols=1,
+            patch_size=112,
+            aspect=2,
             transform=self.transform,
         )
 
@@ -56,139 +71,118 @@ class PapyriMatchesDataModule(pl.LightningDataModule):
         print("valid_dataset len:", len(self.valid_dataset))
         print( "test_dataset len:", len(self.test_dataset ))
 
+    def _common_dataloader(self, dataset, **kwargs):
+        return DataLoader(dataset, collate_fn=collate_fn, batch_size=self.batch_size, pin_memory=True, num_workers=4, **kwargs)
+
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
+        return self._common_dataloader(self.train_dataset, shuffle=True)
 
     def val_dataloader(self):
-        return DataLoader(self.valid_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
+        return self._common_dataloader(self.valid_dataset)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
+        return self._common_dataloader(self.test_dataset)
 
     def predict_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
+        return self._common_dataloader(self.test_dataset)
 
     def teardown(self, stage=None):
         # Used to clean-up when the run is finished
         pass
 
 
-class LitPapyrusAE(pl.LightningModule):
+class LitPapyrusTR(pl.LightningModule):
     def __init__(self, lr=1e-3):
         super().__init__()
 
-        # Vanilla ConvNet Encoder
-        self.encoder = nn.Sequential(
-            nn.Conv2d(4, 16, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(16, 16, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 16, kernel_size=1, stride=1),
-            nn.ReLU(),
-        )
-
-        # Vanilla ConvNet Decoder
-        self.decoder = nn.Sequential(
-            nn.Conv2d(16, 128, kernel_size=1, stride=1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(32, 16, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(16, 16, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(16, 4, kernel_size=3, stride=1, padding=1),
-        )
+        # create model, change the first layer to accept RGBA, change last layer to output a single value
+        self.model = models.maxvit_t()
+        self.model.stem[0][0] = nn.Conv2d(4, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        self.model.classifier[-1] = torch.nn.Linear(512, 1, bias=False)
         
         self.lr = lr
         self.temperature = 1
 
+        self._step_outputs = []
+
     def forward(self, x):
-        return self.encoder(x).flatten(start_dim=1)
-    
+        return self.model(x)
+
     def _common_step(self, stage, batch, batch_idx):
-        left, right = batch
-        n_samples = left.shape[0]
-        device = left.device
+        hA, hB, hmatches, vA, vB, vmatches = batch
+        device = hA.device if hA.numel() > 0 else vA.device
 
-        # Vanilla Autoencoder
-        enc_l = self.encoder(left)
-        enc_r = self.encoder(right)
+        def _combine_all(A, B, direction):
+            axis = 2 if direction == 'horizontal' else 1
+            matches = [torch.cat((Ai, Bj), dim=axis) for Ai in A for Bj in B]
+            matches = torch.stack(matches)
+            return matches
 
-        dec_l = self.decoder(enc_l)
-        dec_r = self.decoder(enc_r)
+        def _forward_and_loss(A, B, direction):
+            n = len(A)
+            if n == 0:
+                logits = torch.tensor([], device=device, dtype=torch.float32)
+                loss = torch.tensor(0, device=device, dtype=torch.float32)
+                return logits, loss
+    
+            AB = _combine_all(A, B, direction).to(device)  # (n x n, 4, H, W)
 
-        # Reconstruction (L2) Loss Term
-        reconstruct_loss = 0.5 * torch.mean((left - dec_l)**2) + 0.5 * torch.mean((right - dec_r)**2)
+            if batch_idx == 0 and n > 1:
+                gridA  = 0.5 + utils.make_grid(A [:, :3], nrow=n) / 2
+                gridB  = 0.5 + utils.make_grid(B [:, :3], nrow=n) / 2
+                gridAB = 0.5 + utils.make_grid(AB[:, :3], nrow=n) / 2
 
-        left_codes  = F.normalize(enc_l.flatten(start_dim=1))
-        right_codes = F.normalize(enc_r.flatten(start_dim=1))
-        logits = torch.matmul(left_codes, right_codes.T) / self.temperature
-        y_true = torch.arange(n_samples, device=device)
+                self.logger.experiment.add_images(f'{stage}/A' , gridA , self.current_epoch, dataformats='CHW')
+                self.logger.experiment.add_images(f'{stage}/B' , gridB , self.current_epoch, dataformats='CHW')
+                self.logger.experiment.add_images(f'{stage}/AB', gridAB, self.current_epoch, dataformats='CHW')
 
-        # Contrastive Loss Term
-        contrastive_loss = F.cross_entropy(logits, y_true)
+            logits = self.forward(AB).view(n, n)  # (n, n)
+            targets = torch.arange(n).to(device)  # (n)
+            logits = logits / self.temperature
+            lossAB = F.cross_entropy(logits, targets, reduction='sum')
+            lossBA = F.cross_entropy(logits.T, targets, reduction='sum')
+            loss = lossAB + lossBA
+            return logits, loss
 
-        # Loss
-        loss = contrastive_loss + 100 * reconstruct_loss
-        
+        h_logits, h_loss = _forward_and_loss(hA, hB, 'horizontal')
+        v_logits, v_loss = _forward_and_loss(vA, vB, 'vertical')
+
+        nh, nv = len(hA), len(vA)
+        loss = (h_loss + v_loss) / 2 * (nh + nv)
+
         # Metrics
-        accuracy = tm.accuracy(logits, y_true)
+        y_scores = torch.cat((h_logits.ravel(), v_logits.ravel()))
+        y_true = torch.cat((torch.eye(nh, dtype=torch.int).flatten(), torch.eye(nv, dtype=torch.int).flatten())).to(device)
 
-        y_scores = logits.ravel()
-        y_true = torch.eye(n_samples, dtype=torch.long, device=device).ravel()
-        auroc = tm.auroc(y_scores, y_true)
+        accuracy = tm.accuracy(y_scores, y_true, task='binary')
+        auroc = tm.auroc(y_scores, y_true, task='binary')
 
         # Log stuff
         if stage == 'train':
-            self.log(f'{stage}/loss', loss)
-            self.log(f'{stage}/rloss', reconstruct_loss)
-            self.log(f'{stage}/closs', contrastive_loss)
+            self.log(f'{stage}/loss', loss, prog_bar=True)
             self.log(f'{stage}/accuracy', accuracy, prog_bar=True)
             self.log(f'{stage}/auroc', auroc, prog_bar=True)
 
-        orig = torch.cat((left[:3,:3], right[:3,:3]), dim=0)
-        recon = torch.cat((dec_l[:3,:3], dec_r[:3,:3]), dim=0)
-        self.logger.experiment.add_images(f'{stage}/input', orig, self.current_epoch)
-        self.logger.experiment.add_images(f'{stage}/recon', recon, self.current_epoch)
-
-        return {
+        out = {
             'loss': loss,
-            'rloss': reconstruct_loss,
-            'closs': contrastive_loss,
             'y_scores': y_scores,
             'y_true': y_true
         }
+
+        self._step_outputs.append(out)
+        return out
 
     def training_step(self, batch, batch_idx):
         return self._common_step('train', batch, batch_idx)
 
     def validation_step(self, batch, batch_idx):
         return self._common_step('val', batch, batch_idx)
-    
+
     def test_step(self, batch, batch_idx):
         return self._common_step('test', batch, batch_idx)
-    
-    def _common_epoch_end(self, stage, step_outputs):
+
+    def _common_epoch_end(self, stage):
+        step_outputs = self._step_outputs
         keys = list(step_outputs[0].keys())
         metrics = {key: [i[key].detach().cpu() for i in step_outputs] for key in keys}
 
@@ -196,32 +190,30 @@ class LitPapyrusAE(pl.LightningModule):
         y_true = torch.cat(metrics['y_true'])
 
         loss = torch.mean(torch.stack(metrics['loss']))
-        reconstruct_loss = torch.mean(torch.stack(metrics['rloss']))
-        contrastive_loss = torch.mean(torch.stack(metrics['closs']))
-        accuracy = tm.accuracy(y_scores, y_true)
-        auroc = tm.auroc(y_scores, y_true)
+        accuracy = tm.accuracy(y_scores, y_true, task='binary')
+        auroc = tm.auroc(y_scores, y_true, task='binary')
 
-        self.log(f'{stage}/loss', loss)
-        self.log(f'{stage}/rloss', reconstruct_loss)
-        self.log(f'{stage}/closs', contrastive_loss)
+        self.log(f'{stage}/loss', loss, prog_bar=True)
         self.log(f'{stage}/accuracy', accuracy, prog_bar=True)
         self.log(f'{stage}/auroc', auroc, prog_bar=True)
 
         figure = sns.histplot(x=y_scores, hue=y_true).get_figure()
         self.logger.experiment.add_figure(f'{stage}/scores', figure, self.current_epoch)
 
-    def training_epoch_end(self, train_step_outputs):
-        self._common_epoch_end('train', train_step_outputs)
+        self._step_outputs.clear()
 
-    def validation_epoch_end(self, validation_step_outputs):
-        self._common_epoch_end('val', validation_step_outputs)
+    def on_train_epoch_end(self):
+        self._common_epoch_end('train')
+
+    def on_validation_epoch_end(self):
+        self._common_epoch_end('val')
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-7)
 
         return {
-            'optimizer': optimizer, 
+            'optimizer': optimizer,
             'lr_scheduler': {
                 'scheduler': lr_scheduler,
                 'interval': 'epoch',
@@ -236,8 +228,8 @@ def main(args):
 
     run_dir = 'runs/'
 
-    dm = PapyriMatchesDataModule(batch_size=8)
-    scorer = LitPapyrusAE(lr=1e-3)
+    dm = PapyriMatchesDataModule(batch_size=4)
+    scorer = LitPapyrusTR(lr=1e-3)
 
     resume = None
     if args.get('resume', False):
@@ -246,18 +238,17 @@ def main(args):
         resume = ckpts[0] if ckpts else None
 
     trainer = Trainer(
-        resume_from_checkpoint=resume,
         default_root_dir=run_dir,
         max_epochs=args['epochs'],
-        gpus=1,
-        deterministic=True,
+        accelerator='gpu',
+        # deterministic=True,
         callbacks=[
             ModelCheckpoint(monitor="val/auroc", save_last=True),
             LearningRateMonitor(logging_interval='step'),
         ]
     )
 
-    trainer.fit(scorer, dm)
+    trainer.fit(scorer, dm, ckpt_path=resume)
     trainer.test(scorer, datamodule=dm)
 
 
