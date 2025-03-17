@@ -79,13 +79,10 @@ class Match:
             return False
 
         if mask is not None:
-            mask_A = mask[y0_A:y1_A, x0_A:x1_A]
-            mask_B = mask[y0_B:y1_B, x0_B:x1_B]
+            invalid_A = self.availability(mask, start_A, end_A) > 0
+            invalid_B = self.availability(mask, start_B, end_B) > 0
 
-            control_value = (0, 0, 0, 255)  # black color
-            invalid_A = np.all(mask_A == control_value, axis=-1)
-            invalid_B = np.all(mask_B == control_value, axis=-1)
-            if np.any(invalid_A) or np.any(invalid_B):
+            if invalid_A or invalid_B:
                 return False
 
         return True
@@ -145,6 +142,9 @@ class PapyrMatchesDataset(Dataset):
     def _find_matches(self):
         # compute integral image of alpha channel to compute availability efficiently
         self.integral_alpha = self.image[:, :, -1].astype(np.float32).cumsum(axis=0).cumsum(axis=1) / 255.
+        self.integral_mask = None
+        if self.mask is not None:
+            self.integral_mask = np.all(self.mask == (0, 0, 0, 255), axis=-1).astype(np.float32).cumsum(axis=0).cumsum(axis=1)
 
         matches = []
         height, width = self.image.shape[:2]
@@ -153,7 +153,7 @@ class PapyrMatchesDataset(Dataset):
                 for x in range(0, width, self.stride):
                     for direction in ('horizontal', 'vertical'):
                         match = Match(y, x, self.aspect, self.patch_size, gap, direction)
-                        if match.is_good(self.integral_alpha, mask=self.mask, threshold=self.min_availability):
+                        if match.is_good(self.integral_alpha, mask=self.integral_mask, threshold=self.min_availability):
                             matches.append(match)
 
         return matches
