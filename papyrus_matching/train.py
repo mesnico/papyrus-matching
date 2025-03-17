@@ -1,5 +1,7 @@
 import argparse
 from pathlib import Path
+import random
+from collections import defaultdict
 
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer, seed_everything
@@ -14,6 +16,9 @@ import torchmetrics.functional as tm
 
 from dataloader import PapyrMatchesDataset
 
+
+# https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+torch.set_float32_matmul_precision('high')
 
 def collate_fn(batch):
 
@@ -47,11 +52,17 @@ class PapyriMatchesDataModule(pl.LightningDataModule):
         # find papyri files
         image_paths = sorted(self.root.rglob('*.png'))
 
+        # n  shuffle
+        random.seed(42)
+        random.shuffle(image_paths)
+
         # split image list
         n_images = len(image_paths)
-        n_train = round(n_images * 0.50)
-        n_valid = round(n_images * 0.25)
+        n_train = round(n_images * 0.70)
+        n_valid = round(n_images * 0.20)
         n_test  = n_images - n_train - n_valid
+
+        print("Num images (train, valid, test):", n_train, n_valid, n_test)
 
         train_image_paths = image_paths[:n_train]
         valid_image_paths = image_paths[n_train:n_train + n_valid]
@@ -99,11 +110,11 @@ class LitPapyrusTR(pl.LightningModule):
         self.model = models.maxvit_t()
         self.model.stem[0][0] = nn.Conv2d(4, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
         self.model.classifier[-1] = torch.nn.Linear(512, 1, bias=False)
-        
+
         self.lr = lr
         self.temperature = 1
 
-        self._step_outputs = []
+        self._step_outputs = defaultdict(list)
 
     def forward(self, x):
         return self.model(x)
@@ -124,8 +135,10 @@ class LitPapyrusTR(pl.LightningModule):
                 logits = torch.tensor([], device=device, dtype=torch.float32)
                 loss = torch.tensor(0, device=device, dtype=torch.float32)
                 return logits, loss
-    
+
             AB = _combine_all(A, B, direction).to(device)  # (n x n, 4, H, W)
+            if direction == 'vertical':
+                AB = torch.rot90(AB, k=1, dims=(3, 2))
 
             if batch_idx == 0 and n > 1:
                 gridA  = 0.5 + utils.make_grid(A [:, :3], nrow=n) / 2
@@ -169,7 +182,7 @@ class LitPapyrusTR(pl.LightningModule):
             'y_true': y_true
         }
 
-        self._step_outputs.append(out)
+        self._step_outputs[stage].append(out)
         return out
 
     def training_step(self, batch, batch_idx):
@@ -182,7 +195,7 @@ class LitPapyrusTR(pl.LightningModule):
         return self._common_step('test', batch, batch_idx)
 
     def _common_epoch_end(self, stage):
-        step_outputs = self._step_outputs
+        step_outputs = self._step_outputs[stage]
         keys = list(step_outputs[0].keys())
         metrics = {key: [i[key].detach().cpu() for i in step_outputs] for key in keys}
 
@@ -200,7 +213,7 @@ class LitPapyrusTR(pl.LightningModule):
         figure = sns.histplot(x=y_scores, hue=y_true).get_figure()
         self.logger.experiment.add_figure(f'{stage}/scores', figure, self.current_epoch)
 
-        self._step_outputs.clear()
+        self._step_outputs[stage].clear()
 
     def on_train_epoch_end(self):
         self._common_epoch_end('train')
@@ -228,7 +241,7 @@ def main(args):
 
     run_dir = 'runs/'
 
-    dm = PapyriMatchesDataModule(batch_size=4)
+    dm = PapyriMatchesDataModule(root='data/organized_test/rgba/', batch_size=16)
     scorer = LitPapyrusTR(lr=1e-3)
 
     resume = None
@@ -243,7 +256,7 @@ def main(args):
         accelerator='gpu',
         # deterministic=True,
         callbacks=[
-            ModelCheckpoint(monitor="val/auroc", save_last=True),
+            ModelCheckpoint(monitor="val/auroc", mode='max', save_last=True),
             LearningRateMonitor(logging_interval='step'),
         ]
     )
@@ -254,7 +267,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Papyrus Match Scorer')
-    parser.add_argument('-e', '--epochs', type=int, default=15, help='number of training epochs')
+    parser.add_argument('-e', '--epochs', type=int, default=30, help='number of training epochs')
     parser.add_argument('-r', '--resume', default=False, action='store_true', help='resume training')
 
     args = parser.parse_args()
