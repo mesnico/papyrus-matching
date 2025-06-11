@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 from pathlib import Path
 
 import pytorch_lightning as pl
@@ -15,8 +16,12 @@ import torchmetrics.functional as tm
 from dataloader import PapyrMatchesDataset
 
 
+# https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+torch.set_float32_matmul_precision('high')
+
+
 class PapyriMatchesDataModule(pl.LightningDataModule):
-    def __init__(self, root='data/fragments/', batch_size=8):
+    def __init__(self, root='data/', batch_size=8):
         super().__init__()
         self.root = Path(root)
         self.batch_size = batch_size
@@ -60,13 +65,13 @@ class PapyriMatchesDataModule(pl.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
 
     def val_dataloader(self):
-        return DataLoader(self.valid_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
+        return DataLoader(self.valid_dataset, batch_size=self.batch_size, shuffle=False, pin_memory=True, num_workers=4)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, pin_memory=True, num_workers=4)
 
     def predict_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True, num_workers=4)
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, pin_memory=True, num_workers=4)
 
     def teardown(self, stage=None):
         # Used to clean-up when the run is finished
@@ -74,7 +79,7 @@ class PapyriMatchesDataModule(pl.LightningDataModule):
 
 
 class LitPapyrusAE(pl.LightningModule):
-    def __init__(self, lr=1e-3):
+    def __init__(self, lr=1e-3, max_epochs=15, temperature=0.1):
         super().__init__()
 
         # Vanilla ConvNet Encoder
@@ -118,13 +123,16 @@ class LitPapyrusAE(pl.LightningModule):
             nn.ReLU(),
             nn.Conv2d(16, 4, kernel_size=3, stride=1, padding=1),
         )
-        
+
         self.lr = lr
-        self.temperature = 1
+        self.temperature = temperature
+        self.max_epochs = max_epochs
+
+        self._step_outputs = defaultdict(list)
 
     def forward(self, x):
         return self.encoder(x).flatten(start_dim=1)
-    
+
     def _common_step(self, stage, batch, batch_idx):
         left, right = batch
         n_samples = left.shape[0]
@@ -150,13 +158,12 @@ class LitPapyrusAE(pl.LightningModule):
 
         # Loss
         loss = contrastive_loss + 100 * reconstruct_loss
-        
-        # Metrics
-        accuracy = tm.accuracy(logits, y_true)
 
+        # Metrics
         y_scores = logits.ravel()
         y_true = torch.eye(n_samples, dtype=torch.long, device=device).ravel()
-        auroc = tm.auroc(y_scores, y_true)
+        accuracy = tm.accuracy(y_scores, y_true, task='binary')
+        auroc = tm.auroc(y_scores, y_true, task='binary')
 
         # Log stuff
         if stage == 'train':
@@ -171,7 +178,7 @@ class LitPapyrusAE(pl.LightningModule):
         self.logger.experiment.add_images(f'{stage}/input', orig, self.current_epoch)
         self.logger.experiment.add_images(f'{stage}/recon', recon, self.current_epoch)
 
-        return {
+        out = {
             'loss': loss,
             'rloss': reconstruct_loss,
             'closs': contrastive_loss,
@@ -179,16 +186,20 @@ class LitPapyrusAE(pl.LightningModule):
             'y_true': y_true
         }
 
+        self._step_outputs[stage].append(out)
+        return out
+
     def training_step(self, batch, batch_idx):
         return self._common_step('train', batch, batch_idx)
 
     def validation_step(self, batch, batch_idx):
         return self._common_step('val', batch, batch_idx)
-    
+
     def test_step(self, batch, batch_idx):
         return self._common_step('test', batch, batch_idx)
-    
-    def _common_epoch_end(self, stage, step_outputs):
+
+    def _common_epoch_end(self, stage):
+        step_outputs = self._step_outputs[stage]
         keys = list(step_outputs[0].keys())
         metrics = {key: [i[key].detach().cpu() for i in step_outputs] for key in keys}
 
@@ -198,8 +209,8 @@ class LitPapyrusAE(pl.LightningModule):
         loss = torch.mean(torch.stack(metrics['loss']))
         reconstruct_loss = torch.mean(torch.stack(metrics['rloss']))
         contrastive_loss = torch.mean(torch.stack(metrics['closs']))
-        accuracy = tm.accuracy(y_scores, y_true)
-        auroc = tm.auroc(y_scores, y_true)
+        accuracy = tm.accuracy(y_scores, y_true, task='binary')
+        auroc = tm.auroc(y_scores, y_true, task='binary')
 
         self.log(f'{stage}/loss', loss)
         self.log(f'{stage}/rloss', reconstruct_loss)
@@ -210,18 +221,20 @@ class LitPapyrusAE(pl.LightningModule):
         figure = sns.histplot(x=y_scores, hue=y_true).get_figure()
         self.logger.experiment.add_figure(f'{stage}/scores', figure, self.current_epoch)
 
-    def training_epoch_end(self, train_step_outputs):
-        self._common_epoch_end('train', train_step_outputs)
+        self._step_outputs[stage].clear()
 
-    def validation_epoch_end(self, validation_step_outputs):
-        self._common_epoch_end('val', validation_step_outputs)
+    def on_train_epoch_end(self):
+        self._common_epoch_end('train')
+
+    def on_validation_epoch_end(self):
+        self._common_epoch_end('val')
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-7)
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.max_epochs, eta_min=1e-7)
 
         return {
-            'optimizer': optimizer, 
+            'optimizer': optimizer,
             'lr_scheduler': {
                 'scheduler': lr_scheduler,
                 'interval': 'epoch',
@@ -237,7 +250,7 @@ def main(args):
     run_dir = 'runs/'
 
     dm = PapyriMatchesDataModule(batch_size=8)
-    scorer = LitPapyrusAE(lr=1e-3)
+    scorer = LitPapyrusAE(lr=1e-3, max_epochs=args['epochs'])
 
     resume = None
     if args.get('resume', False):
@@ -246,13 +259,12 @@ def main(args):
         resume = ckpts[0] if ckpts else None
 
     trainer = Trainer(
-        resume_from_checkpoint=resume,
         default_root_dir=run_dir,
         max_epochs=args['epochs'],
-        gpus=1,
+        accelerator='gpu',
         deterministic=True,
         callbacks=[
-            ModelCheckpoint(monitor="val/auroc", save_last=True),
+            ModelCheckpoint(monitor="val/auroc", mode='max', save_last=True),
             LearningRateMonitor(logging_interval='step'),
         ]
     )
