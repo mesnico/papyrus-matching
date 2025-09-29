@@ -241,7 +241,7 @@ def main(args):
 
     run_dir = 'runs/'
 
-    dm = PapyriMatchesDataModule(root='data/organized_test/rgba/', batch_size=16)
+    dm = PapyriMatchesDataModule(root='data/organized_test/rgba/', batch_size=args['batch_size'])
     scorer = LitPapyrusTR(lr=1e-3)
 
     resume = None
@@ -268,6 +268,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Papyrus Match Scorer')
     parser.add_argument('-e', '--epochs', type=int, default=30, help='number of training epochs')
+    parser.add_argument('-b', '--batch_size', type=int, default=6, help='batch size')
     parser.add_argument('-r', '--resume', default=False, action='store_true', help='resume training')
 
     args = parser.parse_args()
