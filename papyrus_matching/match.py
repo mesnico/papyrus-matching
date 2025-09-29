@@ -54,68 +54,87 @@ class FragmentMatcher(object):
         patches = []
         patches_pos = []
 
-        y_range = range(0, height - self.patch_size, self.stride) 
-        x_range = range(width - self.patch_size, 0, -self.stride) if side == 'right' else range(0, width - self.patch_size, self.stride)
+        def _check_availability(y, x):
+            av = self.availability(integral_alpha, y, x, y + self.patch_size - 1, x + self.patch_size - 1)
+            if av >= self.min_availability:
+                patch = image[y:y+self.patch_size, x:x+self.patch_size]
+                patch = self.transform(patch)
+                patch_pos = (y, x)
 
-        for y in y_range:
+                patches.append(patch)
+                patches_pos.append(patch_pos)
+                return True
+            return False
+
+        if side in ('left', 'right'):
+            y_range = range(0, height - self.patch_size, self.stride)
+            x_range = range(width - self.patch_size, 0, -self.stride) if side == 'right' else range(0, width - self.patch_size, self.stride)
+
+            for y in y_range:
+                for x in x_range:
+                    if _check_availability(y, x):
+                        break
+
+        elif side in ('top', 'bottom'):
+            x_range = range(0, width - self.patch_size, self.stride)
+            y_range = range(height - self.patch_size, 0, -self.stride) if side == 'bottom' else range(0, height - self.patch_size, self.stride)
+
             for x in x_range:
-                av = self.availability(integral_alpha, y, x, y + self.patch_size - 1, x + self.patch_size - 1)
-                if av >= self.min_availability:
-                    patch = image[y:y+self.patch_size, x:x+self.patch_size]
-                    patch = self.transform(patch)
-                    patch_pos = (y, x)
-
-                    patches.append(patch)
-                    patches_pos.append(patch_pos)
-                    break
+                for y in y_range:
+                    if _check_availability(y, x):
+                        break
+        else:
+            raise ValueError(f"Invalid side: {side}, must be one of 'left', 'right', 'top', 'bottom'.")
 
         patches = torch.stack(patches)
         patches_pos = np.array(patches_pos)
         return patches, patches_pos
 
     @torch.no_grad()
-    def match(self, fragmentL, fragmentR):
-        patchesL, positionsL = self.find_patches(fragmentL, side='right')
-        patchesR, positionsR = self.find_patches(fragmentR, side='left')
+    def match(self, fragmentA, fragmentB, direction='horizontal'):
 
-        # breakpoint()
+        sideA = 'right' if direction == 'horizontal' else 'bottom'
+        sideB = 'left'  if direction == 'horizontal' else 'top'
 
-        numL = len(patchesL)
-        numR = len(patchesR)
+        patchesA, positionsA = self.find_patches(fragmentA, side=sideA)
+        patchesB, positionsB = self.find_patches(fragmentB, side=sideB)
 
-        patchesL = patchesL.to(self.device)
-        patchesR = patchesR.to(self.device)
+        numA = len(patchesA)
+        numB = len(patchesB)
 
-        codesL = self.encoder(patchesL).flatten(start_dim=1)
-        codesR = self.encoder(patchesR).flatten(start_dim=1)
+        patchesA = patchesA.to(self.device)
+        patchesB = patchesB.to(self.device)
 
-        codesL = F.normalize(codesL)
-        codesR = F.normalize(codesR)
+        codesA = self.encoder(patchesA).flatten(start_dim=1)
+        codesB = self.encoder(patchesB).flatten(start_dim=1)
 
-        scoresLR = torch.matmul(codesL, codesR.T)
+        codesA = F.normalize(codesA)
+        codesB = F.normalize(codesB)
 
-        # each diagonal of scoresLR scores a different vertical dispacement of the two fragments
-        scored_displacements = [(d, scoresLR.diag(d).mean().item()) for d in range(- numL + 1, numR)]
+        scoresAB = torch.matmul(codesA, codesB.T)
+
+        # each diagonal of scoresAB scores a different vertical dispacement of the two fragments
+        scored_displacements = [(d, scoresAB.diag(d).mean().item()) for d in range(- numA + 1, numB)]
         # ranked_displacements = sorted(scored_displacements, key=lambda x: x[1], reverse=True)
 
-        return positionsL, positionsR, scored_displacements, scoresLR
+        return positionsA, positionsB, scored_displacements, scoresAB
 
-    
+
 if __name__ == "__main__":
-    from skimage import draw 
+    from skimage import draw
     from skimage.io import imread, imsave
     from skimage.transform import rescale
     import matplotlib.pyplot as plt
     import pandas as pd
 
-    fragL = imread('data/test_fragments/test_fragment_easy1_L.png')
-    fragR = imread('data/test_fragments/test_fragment_easy1_R.png')
+    fragL = imread('data/test_fragments/test_fragment_easy1_L_back.png')
+    fragR = imread('data/test_fragments/test_fragment_easy1_R_back.png')
 
-    # fragL = imread('data/test_fragments/test_fragment_hard1_L.png')
-    # fragR = imread('data/test_fragments/test_fragment_hard1_R.png')
+    # fragL = imread('data/test_fragments/test_fragment_hard1_L_back.png')
+    # fragR = imread('data/test_fragments/test_fragment_hard1_R_back.png')
 
-    matcher = FragmentMatcher()
-    posL, posR, scored_displacements, scoresLR = matcher.match(fragL, fragR)
+    matcher = FragmentMatcher(min_availability=0.6)
+    posL, posR, scored_displacements, scoresLR = matcher.match(fragL, fragR, direction='horizontal')
     ranked_displacements = sorted(scored_displacements, key=lambda x: x[1], reverse=True)
 
     scored_displacements = pd.DataFrame(scored_displacements, columns=['displacement', 'score'])
@@ -128,6 +147,7 @@ if __name__ == "__main__":
     rng = np.random.default_rng(7)
 
     for i, (dy, score) in enumerate(ranked_displacements[:5]):
+    # for i, (dy, score) in enumerate(((43, 1.),)):
         print(dy, score)
         Ly0, Lx0 = 0, 0
         Ly1, Lx1 = Lh, Lw
