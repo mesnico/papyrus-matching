@@ -10,7 +10,7 @@ import itertools
 from multiprocessing import Pool
 import os
 
-import utils
+from . import utils
 
 
 def process_pair(args):

@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from skimage import io, draw, transform
 
-from base import BaseMatchDataset
+from loader.base import BaseMatchDataset
 
 
 class PositiveSyntheticMatchDataset(BaseMatchDataset):

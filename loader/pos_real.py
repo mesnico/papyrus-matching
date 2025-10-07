@@ -9,8 +9,8 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from skimage import io
 
-from base import BaseMatchDataset
-import utils
+from loader.base import BaseMatchDataset
+from loader import utils
 
 
 class PositiveRealMatchDataset(BaseMatchDataset):
@@ -105,7 +105,7 @@ class PositiveRealMatchDataset(BaseMatchDataset):
             crop_rgba = self.transform(crop_rgba)
             crop_mask = self.transform(crop_mask)
 
-        return crop_rgba, crop_mask
+        return crop_rgba # , crop_mask
 
 
 if __name__ == "__main__":

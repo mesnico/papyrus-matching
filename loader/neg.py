@@ -8,8 +8,8 @@ from skimage import io, draw, transform
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from base import BaseMatchDataset
-import utils
+from loader.base import BaseMatchDataset
+from loader import utils
 
 
 class NegativeMatchDataset(BaseMatchDataset):

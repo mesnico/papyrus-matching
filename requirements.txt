@@ -2,5 +2,12 @@ jupyter
 pandas
 pytorch-lightning
 scikit-image
+scikit-learn
+scikit-learn-extra
 seaborn
 torchmetrics
+torchvision
+h5py
+shapely
+numpy==1.26.4
+tensorboard
