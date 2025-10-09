@@ -2,6 +2,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from skimage import io, draw, transform
@@ -10,9 +11,10 @@ from loader.base import BaseMatchDataset
 
 
 class PositiveSyntheticMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, stride=32, transform=None, perimeter_points=32, pad=15):
+    def __init__(self, root_dir: Path, side=384, stride=32, transform=None, mask_transform=None, perimeter_points=32, pad=15):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
         self.stride = stride
+        self.mask_transform = mask_transform
 
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
@@ -118,9 +120,12 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
         b_dst_y = b_row_indices.astype(int)
         b_dst_x = b_col_indices.astype(int)
 
-        mask = np.zeros(shape[:2], dtype=bool)
-        mask[a_dst_y, a_dst_x] = True
-        mask[b_dst_y, b_dst_x] = True
+        mask_a = np.zeros(shape[:2], dtype=bool)
+        mask_b = np.zeros(shape[:2], dtype=bool)
+        mask_a[a_dst_y, a_dst_x] = True
+        mask_b[b_dst_y, b_dst_x] = True
+
+        mask = mask_a | mask_b
 
         crop_rgba *= mask[:, :, None]
 
@@ -135,28 +140,54 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
             crop_rgba[yy, xx] = [0, 255, 0, 255]
 
         if self.transform:
-            crop_rgba = self.transform(crop_rgba)
+            mask_a = self.mask_transform(mask_a[:, :, None].astype(np.float32))
+            mask_b = self.mask_transform(mask_b[:, :, None].astype(np.float32))
+            crop_a = self.transform(crop_rgba) * mask_a
+            crop_b = self.transform(crop_rgba) * mask_b
+            crop_rgba = crop_a + crop_b
+            
             # crop_mask = self.transform(crop_mask)
+
+        # ensure when the alpha is zero, the rgb is also zero
+        zero_alpha = crop_rgba[3, :, :] == 0
+        crop_rgba[:3, zero_alpha] = 0
 
         return crop_rgba
 
 if __name__ == "__main__":
 
-    for root in ['data/organized', 'data/organized_test']:
-        for pad in (0, 5, 10, 15):
-            dset = PositiveSyntheticMatchDataset(root, pad=pad)
-            print(f"[{root=} {pad=}] Dataset length:", len(dset))
+    # for root in ['data/organized', 'data/organized_test']:
+    #     for pad in (0, 5, 10, 15):
+    #         dset = PositiveSyntheticMatchDataset(root, pad=pad)
+    #         print(f"[{root=} {pad=}] Dataset length:", len(dset))
 
-    exit()
+    # exit()
     
     root = 'data/organized'
-    dset = PositiveSyntheticMatchDataset(root, pad=15)
+    from torchvision import transforms as T
+    from loader import utils
+    transf = T.Compose([
+        T.ToTensor(),
+        T.Resize((224, 224)),
+        utils.ApplyToRGB(
+            T.RandomGrayscale(p=0.2)
+        ),
+        utils.ApplyToRGB(
+            T.ColorJitter(0.5, 0.5, 0.3, 0.1)
+        ),
+    ])
+    mask_transf = T.Compose([
+        T.ToTensor(),
+        T.Resize((224, 224)),
+    ])
+    dset = PositiveSyntheticMatchDataset(root, pad=15, transform=transf, mask_transform=mask_transf)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
     rng = np.random.default_rng(42)
     for i in rng.choice(len(dset), 10, replace=False):
         sample_rgba = dset[i]
+        sample_rgba = (sample_rgba.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         print(f"Sample {i}: RGBA shape {sample_rgba.shape}")
 
         # draw a red dot at the center of the mask and rgba

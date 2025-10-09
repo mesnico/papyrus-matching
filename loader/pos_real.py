@@ -5,6 +5,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 from PIL import Image
+import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from skimage import io
@@ -14,8 +15,11 @@ from loader import utils
 
 
 class PositiveRealMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, transform=None):
+    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, erosion_size=0):
         super().__init__(root_dir, side, transform)
+        
+        self.mask_transform = mask_transform
+        self.erosion_size = erosion_size
 
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))  # Adjust the glob pattern as needed
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
@@ -99,40 +103,74 @@ class PositiveRealMatchDataset(BaseMatchDataset):
         mask_path = self.root_dir / 'mask' / (image_id + '_mask.png')
         mask = io.imread(mask_path)
         crop_mask = mask[y0:y1, x0:x1]
+        crop_masks = utils.create_prominent_color_masks(crop_mask)  # FIXME: maybe this can be avoided by loading cached contours
+        if isinstance(self.erosion_size, int):
+            erosion_size = self.erosion_size
+        elif isinstance(self.erosion_size, (list, tuple)):
+            erosion_size = np.random.randint(self.erosion_size[0], self.erosion_size[1]+1)
+        else:
+            raise ValueError(f"Invalid erosion_size: {self.erosion_size}")
+
+        if erosion_size > 0:
+            # Erode the masks to avoid boundary artifacts
+            crop_masks = [utils.erosion(m, erosion_size=erosion_size) for m in crop_masks]
 
         # Extract the contact point region
         if self.transform:
-            crop_rgba = self.transform(crop_rgba)
-            crop_mask = self.transform(crop_mask)
+            crop_masks = [self.mask_transform(m) for m in crop_masks]
+            crops = [self.transform(crop_rgba) * m for m in crop_masks]
+            crop_rgba = torch.stack(crops, dim=0).max(dim=0)[0]
+
+        # ensure when the alpha is zero, the rgb is also zero
+        zero_alpha = crop_rgba[3, :, :] == 0
+        crop_rgba[:3, zero_alpha] = 0
 
         return crop_rgba # , crop_mask
 
 
 if __name__ == "__main__":
 
-    for root in ['data/organized', 'data/organized_test']:
-        dset = PositiveRealMatchDataset(root)
-        print(f"[{root=}] Dataset length:", len(dset))
+    # for root in ['data/organized', 'data/organized_test']:
+    #     dset = PositiveRealMatchDataset(root)
+    #     print(f"[{root=}] Dataset length:", len(dset))
 
-    exit()
+    # exit()
 
     from skimage import draw
     root = 'data/organized'
-    dset = PositiveRealMatchDataset(root)
+    from torchvision import transforms as T
+    from loader import utils
+    transf = T.Compose([
+        T.ToTensor(),
+        T.Resize((224, 224)),
+        utils.ApplyToRGB(
+            T.RandomGrayscale(p=0.2)
+        ),
+        utils.ApplyToRGB(
+            T.ColorJitter(0.5, 0.5, 0.3, 0.1)
+        ),
+    ])
+
+    mask_transf = T.Compose([
+        T.ToTensor(),
+        T.Resize((224, 224)),
+    ])
+    dset = PositiveRealMatchDataset(root, transform=transf, mask_transform=mask_transf, erosion_size=4)
     print(len(dset))
-    sample_rgba, sample_mask = dset[0]
+    sample_rgba = dset[0]
     print(sample_rgba.shape)
 
     for i in np.random.choice(len(dset), 10, replace=False):
-        sample_rgba, sample_mask = dset[i]
-        print(f"Sample {i}: RGBA shape {sample_rgba.shape}, Mask shape {sample_mask.shape}")
+        sample_rgba = dset[i]
+        sample_rgba = (sample_rgba.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+        # print(f"Sample {i}: RGBA shape {sample_rgba.shape}, Mask shape {sample_mask.shape}")
 
         # draw a red dot at the center of the mask and rgba
-        center = (sample_mask.shape[0] // 2, sample_mask.shape[1] // 2)
-        rr, cc = draw.disk(center, 5, shape=sample_mask.shape[:2])
-        sample_mask[rr, cc] = [255, 0, 0, 255]
+        center = (sample_rgba.shape[0] // 2, sample_rgba.shape[1] // 2)
+        rr, cc = draw.disk(center, 5, shape=sample_rgba.shape[:2])
+        # sample_mask[rr, cc] = [255, 0, 0, 255]
         sample_rgba[rr, cc] = [255, 0, 0, 255]
 
         # Save the sample images
         io.imsave(f'figures/real_pos_samples/sample_{i:02d}rgba.png', sample_rgba)
-        io.imsave(f'figures/real_pos_samples/sample_{i:02d}mask.png', sample_mask)
+        # io.imsave(f'figures/real_pos_samples/sample_{i:02d}mask.png', sample_mask)

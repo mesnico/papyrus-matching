@@ -8,6 +8,7 @@ import numpy as np
 from loader.pos_real import PositiveRealMatchDataset
 from loader.pos_synth import PositiveSyntheticMatchDataset
 from loader.neg import NegativeMatchDataset
+from loader import utils
 
 
 # =============================================================================
@@ -109,8 +110,21 @@ class BalancedMatchDataModule(pl.LightningDataModule):
         self.train_transforms = transforms.Compose([
             transforms.ToTensor(),
             transforms.Resize((224, 224)),
+            utils.ApplyToRGB(
+                transforms.RandomGrayscale(p=0.2)
+            ),
+            utils.ApplyToRGB(
+                transforms.ColorJitter(0.5, 0.5, 0.3, 0.1)
+            ),
         ])
-        self.val_transforms = self.train_transforms
+        self.val_transforms = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Resize((224, 224)),
+        ])
+        self.masks_transforms = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Resize((224, 224)),
+        ])
 
     def setup(self, stage: str = None):
         """
@@ -120,9 +134,9 @@ class BalancedMatchDataModule(pl.LightningDataModule):
         """
         if stage == "fit" or stage is None:
             # --- Setup for Training Data ---
-            pos_real_train = PositiveRealMatchDataset(self.train_root, transform=self.train_transforms)
-            pos_synth_train = PositiveSyntheticMatchDataset(self.train_root, transform=self.train_transforms)
-            neg_train = NegativeMatchDataset(self.train_root, transform=self.train_transforms)
+            pos_real_train = PositiveRealMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, erosion_size=(1, 10))
+            pos_synth_train = PositiveSyntheticMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms)
+            neg_train = NegativeMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms)
 
             # Combine positive datasets
             pos_train = ConcatDataset([pos_real_train, pos_synth_train])
@@ -143,9 +157,9 @@ class BalancedMatchDataModule(pl.LightningDataModule):
             print(f"Training setup complete. Positive samples: {len_pos}, Negative samples: {len_neg}")
 
             # --- Setup for Validation Data ---
-            pos_real_val = PositiveRealMatchDataset(self.val_root, transform=self.val_transforms)
-            pos_synth_val = PositiveSyntheticMatchDataset(self.val_root, transform=self.val_transforms)
-            neg_val = NegativeMatchDataset(self.val_root, transform=self.val_transforms)
+            pos_real_val = PositiveRealMatchDataset(self.val_root, transform=self.val_transforms, mask_transform=self.masks_transforms, erosion_size=4)
+            pos_synth_val = PositiveSyntheticMatchDataset(self.val_root, transform=self.val_transforms, mask_transform=self.masks_transforms)
+            neg_val = NegativeMatchDataset(self.val_root, transform=self.val_transforms, mask_transform=self.masks_transforms)
             
             # Combine and wrap validation datasets
             pos_val = ConcatDataset([pos_real_val, pos_synth_val])

@@ -5,6 +5,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 from skimage import io, draw, transform
+import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -13,8 +14,9 @@ from loader import utils
 
 
 class NegativeMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, transform=None, perimeter_points=32, pad=15):
+    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, perimeter_points=32, pad=15):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
+        self.mask_transform = mask_transform
         
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))  # Adjust the glob pattern as needed
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
@@ -108,28 +110,57 @@ class NegativeMatchDataset(BaseMatchDataset):
             crop_rgba[yy, xx] = [0, 255, 0, 255]
 
         if self.transform:
-            crop_rgba = self.transform(crop_rgba)
+            mask_a = np.zeros(shape[:2], dtype=np.float32)
+            mask_b = np.zeros(shape[:2], dtype=np.float32)
+            mask_a[a_dst_y, a_dst_x] = 1.0
+            mask_b[b_dst_y, b_dst_x] = 1.0
+            mask_a = self.mask_transform(mask_a[:, :, None])
+            mask_b = self.mask_transform(mask_b[:, :, None])
+            crop_a = self.transform(crop_rgba) * mask_a
+            crop_b = self.transform(crop_rgba) * mask_b
+            crop_rgba = crop_a + crop_b
+            
             # crop_mask = self.transform(crop_mask)
+
+        # ensure when the alpha is zero, the rgb is also zero
+        zero_alpha = crop_rgba[3, :, :] == 0
+        crop_rgba[:3, zero_alpha] = 0
 
         return crop_rgba
 
 if __name__ == "__main__":
 
-    for root in ['data/organized', 'data/organized_test']:
-        for pad in (0,5,10,15):
-            dset = NegativeMatchDataset(root, pad=pad)
-            print(f"[{root=} {pad=}] Dataset length:", len(dset))
+    # for root in ['data/organized', 'data/organized_test']:
+    #     for pad in (0,5,10,15):
+    #         dset = NegativeMatchDataset(root, pad=pad)
+    #         print(f"[{root=} {pad=}] Dataset length:", len(dset))
 
-    exit()
+    # exit()
     
     root = 'data/organized'
-    dset = NegativeMatchDataset(root, pad=0)
+    from torchvision import transforms as T
+    transf = T.Compose([
+        T.ToTensor(),
+        T.Resize((224, 224)),
+        utils.ApplyToRGB(
+            T.RandomGrayscale(p=0.2)
+        ),
+        utils.ApplyToRGB(
+            T.ColorJitter(0.5, 0.5, 0.3, 0.0)
+        ),
+    ])
+    mask_transf = T.Compose([
+        T.ToTensor(),
+        T.Resize((224, 224)),
+    ])
+    dset = NegativeMatchDataset(root, pad=15, transform=transf, mask_transform=mask_transf)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
     rng = np.random.default_rng(42)
     for i in rng.choice(len(dset), 10, replace=False):
         sample_rgba = dset[i]
+        sample_rgba = (sample_rgba.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         print(f"Sample {i}: RGBA shape {sample_rgba.shape}")
 
         # draw a red dot at the center of the mask and rgba

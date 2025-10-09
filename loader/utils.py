@@ -6,6 +6,8 @@ import shapely
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn_extra.cluster import KMedoids
+import torch
+import cv2
 
 
 def stack_ragged(array_list, axis=0):
@@ -178,3 +180,87 @@ def contour_intersect_area(a, b):
         intersection = a_poly.intersection(b_poly)
         return intersection.area
     return -1
+
+
+class ApplyToRGB:
+    """
+    A wrapper that applies a given transform to the RGB channels of an RGBA image tensor.
+    """
+    def __init__(self, transform):
+        self.transform = transform
+
+    def __call__(self, img_tensor):
+        """
+        Args:
+            img_tensor (Tensor): An RGBA image tensor of shape [4, H, W].
+
+        Returns:
+            Tensor: The transformed RGBA image tensor.
+        """
+        # Ensure the input is a 4-channel tensor
+        if img_tensor.shape[0] != 4:
+            # If not 4 channels, apply transform to the whole image (e.g., for RGB)
+            return self.transform(img_tensor)
+
+        # 1. Separate the RGB and Alpha channels
+        rgb_channels = img_tensor[:3, :, :]
+        alpha_channel = img_tensor[3:, :, :] # Shape [1, H, W]
+
+        # 2. Apply the wrapped transform to the RGB channels
+        transformed_rgb = self.transform(rgb_channels)
+
+        # 3. Recombine the transformed RGB with the original Alpha
+        transformed_rgba = torch.cat([transformed_rgb, alpha_channel], dim=0)
+
+        return transformed_rgba
+    
+
+def create_prominent_color_masks(image_rgba, area_cutoff=0.01):
+    """
+    Creates binary masks for the most prominent colors in an RGBA image.
+
+    It ignores transparent pixels and generates masks only for the most frequent
+    colors that account for a given percentile of the total pixels.
+
+    Args:
+        image: Input RGBA image as a numpy array.
+        area_cutoff (float): Percentile cutoff (between 0 and 1) to determine prominent colors.
+        output_dir (str): Directory to save the output masks.
+    """
+
+    # 2. Filter out transparent pixels (where alpha=0)
+    alpha_channel = image_rgba[:, :, 3]
+    foreground_mask = (alpha_channel > 0) & (image_rgba[:, :, :3].sum(axis=2) > 0)  # Non-transparent and non-black pixels
+    image_bgr = image_rgba[:, :, :3]
+    
+    # Get a flat list of BGR colors for only the visible pixels
+    foreground_pixels = image_bgr[foreground_mask]
+
+    # 3. Get the color histogram
+    # np.unique with return_counts is a fast way to get a histogram of unique items
+    unique_colors, counts = np.unique(foreground_pixels, axis=0, return_counts=True)
+
+    # 4. Get colors whose frequency is above the area_cutoff percentile
+    total_pixels = foreground_pixels.shape[0]
+    valid_pixels = counts > total_pixels * area_cutoff
+
+    # These are the colors we will generate masks for
+    prominent_colors = unique_colors[valid_pixels]
+
+    # 5. Generate a mask for each prominent color
+    masks = []
+    for color in prominent_colors:
+
+        # Use cv2.inRange for a fast, exact match
+        mask = cv2.inRange(image_bgr, lowerb=color, upperb=color)
+        masks.append(mask)
+
+    return masks
+
+
+def erosion(src, erosion_size, erosion_shape=cv2.MORPH_RECT):    
+    element = cv2.getStructuringElement(erosion_shape, (2 * erosion_size + 1, 2 * erosion_size + 1),
+                                       (erosion_size, erosion_size))
+    
+    erosion_dst = cv2.erode(src, element)
+    return erosion_dst
