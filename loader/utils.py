@@ -215,7 +215,7 @@ class ApplyToRGB:
         return transformed_rgba
     
 
-def create_prominent_color_masks(image_rgba, area_cutoff=0.01):
+def create_prominent_color_masks(image_rgba, area_cutoff=0.01):     # FIXME: this is a duplicate of find_main_contours. Remove this function later.
     """
     Creates binary masks for the most prominent colors in an RGBA image.
 
