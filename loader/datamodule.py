@@ -2,6 +2,7 @@ import torch
 import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader, ConcatDataset, Sampler, Subset
 import torchvision.transforms as transforms
+from torchvision.transforms import v2 as T2
 from typing import List, Iterator
 import numpy as np
 
@@ -107,15 +108,22 @@ class BalancedMatchDataModule(pl.LightningDataModule):
         self.train_pos_indices = None
         self.train_neg_indices = None
 
-        self.train_transforms = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize((224, 224)),
+        self.train_transforms = T2.Compose([
+            T2.ToImage(),
+            T2.Resize((224, 224)),
             utils.ApplyToRGB(
-                transforms.RandomGrayscale(p=0.2)
+                T2.JPEG(quality=(20, 100)),
             ),
             utils.ApplyToRGB(
-                transforms.ColorJitter(0.5, 0.5, 0.3, 0.1)
+                T2.RandomPosterize(bits=4, p=0.2),
             ),
+            utils.ApplyToRGB(
+                T2.RandomGrayscale(p=0.2)
+            ),
+            utils.ApplyToRGB(
+                T2.ColorJitter(0.5, 0.5, 0.3, 0.1)
+            ),
+            T2.ToDtype(torch.float32, scale=True),
         ])
         self.val_transforms = transforms.Compose([
             transforms.ToTensor(),
@@ -135,8 +143,8 @@ class BalancedMatchDataModule(pl.LightningDataModule):
         if stage == "fit" or stage is None:
             # --- Setup for Training Data ---
             pos_real_train = PositiveRealMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, erosion_size=(1, 10))
-            pos_synth_train = PositiveSyntheticMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms)
-            neg_train = NegativeMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms)
+            pos_synth_train = PositiveSyntheticMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, max_shift=30, pad=3)
+            neg_train = NegativeMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, max_shift=30, pad=3)
 
             # Combine positive datasets
             pos_train = ConcatDataset([pos_real_train, pos_synth_train])

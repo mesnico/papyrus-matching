@@ -21,13 +21,28 @@ torch.set_float32_matmul_precision('high')
 
 
 class LitPapyrusTR(pl.LightningModule):
-    def __init__(self, lr=1e-3):
+    def __init__(self, lr=1e-3, pretrained=True, frozen_backbone=True):
         super().__init__()
 
         # create model, change the first layer to accept RGBA, change last layer to output a single value
-        self.model = models.maxvit_t()
+        weights = models.MaxVit_T_Weights.IMAGENET1K_V1 if pretrained else None
+        self.model = models.maxvit_t(weights=weights)
         self.model.stem[0][0] = nn.Conv2d(4, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
         self.model.classifier[-1] = torch.nn.Linear(512, 1, bias=False)
+
+        if frozen_backbone:
+            for param in self.model.parameters():
+                param.requires_grad = False
+            for param in self.model.classifier[-1].parameters():
+                param.requires_grad = True
+            for param in self.model.stem[0][0].parameters():
+                param.requires_grad = True
+            for param in self.model.blocks[-1].parameters():
+                param.requires_grad = True
+
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.model.parameters())
+        print(f"[INFO] Trainable parameters: {trainable_params}/{total_params} ({100 * trainable_params / total_params:.2f}%)")
 
         self.lr = lr
         self.temperature = 1

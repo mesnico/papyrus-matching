@@ -6,14 +6,16 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from skimage import io, draw, transform
+from torchvision.transforms import functional as F
 
 from loader.base import BaseMatchDataset
 
 
 class PositiveSyntheticMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, stride=32, transform=None, mask_transform=None, perimeter_points=32, pad=15):
+    def __init__(self, root_dir: Path, side=384, stride=32, transform=None, mask_transform=None, perimeter_points=32, pad=15, max_shift=0):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
         self.stride = stride
+        self.max_shift = max_shift
         self.mask_transform = mask_transform
 
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))
@@ -104,10 +106,11 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
         shape = crop_rgba.shape
         half_side = self.side // 2
         half_delta = delta / 2
+        shift_vector = delta * np.random.rand() * self.max_shift
 
         # move the contours such that they are centered in the crop
-        t_a = - a_contact + half_side - self.pad * half_delta
-        t_b = - b_contact + (self.side - half_side) + self.pad * (delta - half_delta)
+        t_a = - a_contact + half_side - self.pad * half_delta - shift_vector
+        t_b = - b_contact + (self.side - half_side) + self.pad * (delta - half_delta) + shift_vector
         moved_a_contour = a_contour + t_a
         moved_b_contour = b_contour + t_b
 
@@ -139,11 +142,39 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
             yy, xx = draw.polygon_perimeter(moved_b_contour[:, 0], moved_b_contour[:, 1], shape=shape)
             crop_rgba[yy, xx] = [0, 255, 0, 255]
 
-        if self.transform:
+        if self.transform:            
+            # 1. Generate a random 2D translation (dx, dy)
+            #    We'll apply this shift to piece B.
+            dx, dy = int(shift_vector[1]), int(shift_vector[0])
+
+            # 2. Apply the base transform to get the original, un-shifted tensor
+            transformed_rgba_for_shift = self.transform(crop_rgba)
+            transformed_rgba = self.transform(crop_rgba)
+
+            # 3. Create a shifted version of the image tensor for piece B
+            #    We use F.affine for an efficient translation.
+            #    This shifts the image content but keeps the canvas size the same.
+            shifted_rgba = F.affine(transformed_rgba_for_shift,
+                                    angle=0,
+                                    translate=(dx, dy),
+                                    scale=1.0,
+                                    shear=(0.0, 0.0),
+                                    # Use 'nearest' or 'bilinear'
+                                    interpolation=F.InterpolationMode.BILINEAR,
+                                    # Fill with 0 (transparent black)
+                                    fill=0.0) 
+
+            # 4. Transform the masks (as before)
             mask_a = self.mask_transform(mask_a[:, :, None].astype(np.float32))
             mask_b = self.mask_transform(mask_b[:, :, None].astype(np.float32))
-            crop_a = self.transform(crop_rgba) * mask_a
-            crop_b = self.transform(crop_rgba) * mask_b
+
+            # 5. Apply masks to the *different* image versions
+            #    Piece A uses the original, un-shifted image
+            crop_a = transformed_rgba * mask_a
+            #    Piece B uses the new, shifted image
+            crop_b = shifted_rgba * mask_b
+
+            # 6. Combine the two pieces
             crop_rgba = crop_a + crop_b
             
             # crop_mask = self.transform(crop_mask)
@@ -165,27 +196,35 @@ if __name__ == "__main__":
     
     root = 'data/organized'
     from torchvision import transforms as T
+    from torchvision.transforms import v2 as T2
     from loader import utils
     transf = T.Compose([
-        T.ToTensor(),
-        T.Resize((224, 224)),
+        T2.ToImage(),
+        T2.Resize((224, 224)),
+        utils.ApplyToRGB(
+            T2.JPEG(quality=(20, 100)),
+        ),
+        utils.ApplyToRGB(
+            T2.RandomPosterize(bits=4, p=0.2),
+        ),
         utils.ApplyToRGB(
             T.RandomGrayscale(p=0.2)
         ),
         utils.ApplyToRGB(
             T.ColorJitter(0.5, 0.5, 0.3, 0.1)
         ),
+        T2.ToDtype(torch.float32, scale=True),
     ])
     mask_transf = T.Compose([
         T.ToTensor(),
         T.Resize((224, 224)),
     ])
-    dset = PositiveSyntheticMatchDataset(root, pad=15, transform=transf, mask_transform=mask_transf)
+    dset = PositiveSyntheticMatchDataset(root, pad=3, max_shift=30, transform=transf, mask_transform=mask_transf)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
     rng = np.random.default_rng(42)
-    for i in rng.choice(len(dset), 10, replace=False):
+    for i in rng.choice(len(dset), 30, replace=False):
         sample_rgba = dset[i]
         sample_rgba = (sample_rgba.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         print(f"Sample {i}: RGBA shape {sample_rgba.shape}")

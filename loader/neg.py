@@ -14,9 +14,10 @@ from loader import utils
 
 
 class NegativeMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, perimeter_points=32, pad=15):
+    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, perimeter_points=32, pad=15, max_shift=0):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
         self.mask_transform = mask_transform
+        self.max_shift = max_shift
         
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))  # Adjust the glob pattern as needed
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
@@ -57,10 +58,11 @@ class NegativeMatchDataset(BaseMatchDataset):
         # find the coordinates of pixels to copy from the original image
         half_side = self.side // 2
         half_delta = delta / 2
+        shift_vector = delta * np.random.rand() * self.max_shift
 
         # move the contours such that they are centered in the crop
-        t_a = - a_contact + half_side - self.pad * half_delta
-        t_b = - b_contact + (self.side - half_side) + self.pad * (delta - half_delta)
+        t_a = - a_contact + half_side - self.pad * half_delta - shift_vector
+        t_b = - b_contact + (self.side - half_side) + self.pad * (delta - half_delta) + shift_vector
         moved_a_contour = a_contour + t_a
         moved_b_contour = b_contour + t_b
 
@@ -139,21 +141,29 @@ if __name__ == "__main__":
     
     root = 'data/organized'
     from torchvision import transforms as T
+    from torchvision.transforms import v2 as T2
     transf = T.Compose([
-        T.ToTensor(),
-        T.Resize((224, 224)),
+        T2.ToImage(),
+        T2.Resize((224, 224)),
+        utils.ApplyToRGB(
+            T2.JPEG(quality=(20, 100)),
+        ),
+        utils.ApplyToRGB(
+            T2.RandomPosterize(bits=4, p=0.2),
+        ),
         utils.ApplyToRGB(
             T.RandomGrayscale(p=0.2)
         ),
         utils.ApplyToRGB(
-            T.ColorJitter(0.5, 0.5, 0.3, 0.0)
+            T.ColorJitter(0.5, 0.5, 0.3, 0.1)
         ),
+        T2.ToDtype(torch.float32, scale=True),
     ])
     mask_transf = T.Compose([
         T.ToTensor(),
         T.Resize((224, 224)),
     ])
-    dset = NegativeMatchDataset(root, pad=15, transform=transf, mask_transform=mask_transf)
+    dset = NegativeMatchDataset(root, pad=0, max_shift=0, transform=transf, mask_transform=mask_transf)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
