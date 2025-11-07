@@ -37,7 +37,7 @@ class LitPapyrusTR(pl.LightningModule):
                 param.requires_grad = True
             for param in self.model.stem[0][0].parameters():
                 param.requires_grad = True
-            for param in self.model.blocks[-1].parameters():
+            for param in self.model.blocks[-1].layers[-1].parameters():
                 param.requires_grad = True
 
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)

@@ -14,9 +14,10 @@ from loader import utils
 
 
 class NegativeMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, perimeter_points=32, pad=15, max_shift=0):
+    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, post_transform=None, perimeter_points=32, pad=15, max_shift=0):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
         self.mask_transform = mask_transform
+        self.post_transform = post_transform
         self.max_shift = max_shift
         
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))  # Adjust the glob pattern as needed
@@ -58,11 +59,11 @@ class NegativeMatchDataset(BaseMatchDataset):
         # find the coordinates of pixels to copy from the original image
         half_side = self.side // 2
         half_delta = delta / 2
-        shift_vector = delta * np.random.rand() * self.max_shift
+        shift_magnitude = ((np.random.rand() * 2) - 1) * self.max_shift
 
         # move the contours such that they are centered in the crop
-        t_a = - a_contact + half_side - self.pad * half_delta - shift_vector
-        t_b = - b_contact + (self.side - half_side) + self.pad * (delta - half_delta) + shift_vector
+        t_a = - a_contact + half_side - (self.pad + shift_magnitude) * half_delta
+        t_b = - b_contact + (self.side - half_side) + (self.pad + shift_magnitude) * (delta - half_delta)
         moved_a_contour = a_contour + t_a
         moved_b_contour = b_contour + t_b
 
@@ -120,13 +121,16 @@ class NegativeMatchDataset(BaseMatchDataset):
             mask_b = self.mask_transform(mask_b[:, :, None])
             crop_a = self.transform(crop_rgba) * mask_a
             crop_b = self.transform(crop_rgba) * mask_b
-            crop_rgba = crop_a + crop_b
+            crop_rgba = torch.maximum(crop_a, crop_b)
             
             # crop_mask = self.transform(crop_mask)
 
         # ensure when the alpha is zero, the rgb is also zero
         zero_alpha = crop_rgba[3, :, :] == 0
         crop_rgba[:3, zero_alpha] = 0
+
+        if self.post_transform:
+            crop_rgba = self.post_transform(crop_rgba)
 
         return crop_rgba
 
@@ -144,7 +148,6 @@ if __name__ == "__main__":
     from torchvision.transforms import v2 as T2
     transf = T.Compose([
         T2.ToImage(),
-        T2.Resize((224, 224)),
         utils.ApplyToRGB(
             T2.JPEG(quality=(20, 100)),
         ),
@@ -161,9 +164,13 @@ if __name__ == "__main__":
     ])
     mask_transf = T.Compose([
         T.ToTensor(),
-        T.Resize((224, 224)),
     ])
-    dset = NegativeMatchDataset(root, pad=0, max_shift=0, transform=transf, mask_transform=mask_transf)
+    post_transf = T.Compose([
+        T.Resize((224, 224)),
+        T.RandomVerticalFlip(p=0.5),
+        T.RandomHorizontalFlip(p=0.5),
+    ])
+    dset = NegativeMatchDataset(root, pad=20, max_shift=15, transform=transf, mask_transform=mask_transf, post_transform=post_transf)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
@@ -180,3 +187,7 @@ if __name__ == "__main__":
 
         # Save the sample images
         io.imsave(f'figures/neg_samples/sample_{i:02d}rgba.png', sample_rgba)
+
+        # Save the alpha channel separately for visualization
+        alpha_channel = sample_rgba[:, :, 3]
+        io.imsave(f'figures/neg_samples/sample_{i:02d}alpha.png', alpha_channel)

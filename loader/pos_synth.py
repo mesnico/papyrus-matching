@@ -12,11 +12,13 @@ from loader.base import BaseMatchDataset
 
 
 class PositiveSyntheticMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, stride=32, transform=None, mask_transform=None, perimeter_points=32, pad=15, max_shift=0):
+    def __init__(self, root_dir: Path, side=384, stride=32, transform=None, mask_transform=None, post_transform=None, perimeter_points=32, pad=15, max_shift=0, max_tangent_shift=0):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
         self.stride = stride
         self.max_shift = max_shift
+        self.max_tangent_shift = max_tangent_shift
         self.mask_transform = mask_transform
+        self.post_transform = post_transform
 
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
@@ -106,11 +108,11 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
         shape = crop_rgba.shape
         half_side = self.side // 2
         half_delta = delta / 2
-        shift_vector = delta * np.random.rand() * self.max_shift
+        shift_magnitude = ((np.random.rand() * 2) - 1) * self.max_shift
 
         # move the contours such that they are centered in the crop
-        t_a = - a_contact + half_side - self.pad * half_delta - shift_vector
-        t_b = - b_contact + (self.side - half_side) + self.pad * (delta - half_delta) + shift_vector
+        t_a = - a_contact + half_side - (self.pad + shift_magnitude) * half_delta
+        t_b = - b_contact + (self.side - half_side) + (self.pad + shift_magnitude) * (delta - half_delta)
         moved_a_contour = a_contour + t_a
         moved_b_contour = b_contour + t_b
 
@@ -142,10 +144,15 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
             yy, xx = draw.polygon_perimeter(moved_b_contour[:, 0], moved_b_contour[:, 1], shape=shape)
             crop_rgba[yy, xx] = [0, 255, 0, 255]
 
-        if self.transform:            
+        if self.transform:
             # 1. Generate a random 2D translation (dx, dy)
             #    We'll apply this shift to piece B.
-            dx, dy = int(shift_vector[1]), int(shift_vector[0])
+            shift_vector = delta * shift_magnitude
+            dx, dy = int(shift_vector[1]), int(shift_vector[0])  # note: (dy, dx) order
+            orthogonal_delta = np.array([-delta[1], delta[0]])
+            tangent_rgba_shift = orthogonal_delta * (((np.random.rand() * 2) - 1) * self.max_tangent_shift)
+            dx += int(tangent_rgba_shift[1])
+            dy += int(tangent_rgba_shift[0])
 
             # 2. Apply the base transform to get the original, un-shifted tensor
             transformed_rgba_for_shift = self.transform(crop_rgba)
@@ -154,9 +161,11 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
             # 3. Create a shifted version of the image tensor for piece B
             #    We use F.affine for an efficient translation.
             #    This shifts the image content but keeps the canvas size the same.
+            relative_scale_x = transformed_rgba_for_shift.shape[2] / crop_rgba.shape[1]
+            relative_scale_y = transformed_rgba_for_shift.shape[1] / crop_rgba.shape[0]
             shifted_rgba = F.affine(transformed_rgba_for_shift,
                                     angle=0,
-                                    translate=(dx, dy),
+                                    translate=(int(dx * relative_scale_x), int(dy * relative_scale_y)),
                                     scale=1.0,
                                     shear=(0.0, 0.0),
                                     # Use 'nearest' or 'bilinear'
@@ -175,13 +184,16 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
             crop_b = shifted_rgba * mask_b
 
             # 6. Combine the two pieces
-            crop_rgba = crop_a + crop_b
+            crop_rgba = torch.maximum(crop_a, crop_b)
             
             # crop_mask = self.transform(crop_mask)
 
         # ensure when the alpha is zero, the rgb is also zero
         zero_alpha = crop_rgba[3, :, :] == 0
         crop_rgba[:3, zero_alpha] = 0
+
+        if self.post_transform:
+            crop_rgba = self.post_transform(crop_rgba)
 
         return crop_rgba
 
@@ -200,7 +212,6 @@ if __name__ == "__main__":
     from loader import utils
     transf = T.Compose([
         T2.ToImage(),
-        T2.Resize((224, 224)),
         utils.ApplyToRGB(
             T2.JPEG(quality=(20, 100)),
         ),
@@ -217,9 +228,13 @@ if __name__ == "__main__":
     ])
     mask_transf = T.Compose([
         T.ToTensor(),
-        T.Resize((224, 224)),
     ])
-    dset = PositiveSyntheticMatchDataset(root, pad=3, max_shift=30, transform=transf, mask_transform=mask_transf)
+    post_transforms = T2.Compose([
+        T.Resize((224, 224)),
+        T.RandomVerticalFlip(p=0.5),
+        T.RandomHorizontalFlip(p=0.5),
+    ])
+    dset = PositiveSyntheticMatchDataset(root, pad=20, max_shift=15, max_tangent_shift=40, transform=transf, mask_transform=mask_transf, post_transform=post_transforms)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
@@ -236,3 +251,7 @@ if __name__ == "__main__":
 
         # Save the sample images
         io.imsave(f'figures/synth_pos_samples/sample_{i:02d}rgba.png', sample_rgba)
+
+        # Save the alpha channel separately for visualization
+        alpha_channel = sample_rgba[:, :, 3]
+        io.imsave(f'figures/synth_pos_samples/sample_{i:02d}alpha.png', alpha_channel)

@@ -15,11 +15,12 @@ from loader import utils
 
 
 class PositiveRealMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, erosion_size=0):
+    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, post_transform=None, erosion_size=0):
         super().__init__(root_dir, side, transform)
         
         self.mask_transform = mask_transform
         self.erosion_size = erosion_size
+        self.post_transform = post_transform
 
         self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))  # Adjust the glob pattern as needed
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
@@ -124,6 +125,9 @@ class PositiveRealMatchDataset(BaseMatchDataset):
         # ensure when the alpha is zero, the rgb is also zero
         zero_alpha = crop_rgba[3, :, :] == 0
         crop_rgba[:3, zero_alpha] = 0
+
+        if self.post_transform:
+            crop_rgba = self.post_transform(crop_rgba)
 
         return crop_rgba # , crop_mask
 

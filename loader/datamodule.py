@@ -124,14 +124,20 @@ class BalancedMatchDataModule(pl.LightningDataModule):
                 T2.ColorJitter(0.5, 0.5, 0.3, 0.1)
             ),
             T2.ToDtype(torch.float32, scale=True),
+            # T2.Normalize(mean=[0.5, 0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5, 0.5]),
         ])
         self.val_transforms = transforms.Compose([
             transforms.ToTensor(),
             transforms.Resize((224, 224)),
+            # transforms.Normalize(mean=[0.5, 0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5, 0.5]),
         ])
         self.masks_transforms = transforms.Compose([
             transforms.ToTensor(),
             transforms.Resize((224, 224)),
+        ])
+        self.train_post_transforms = T2.Compose([
+            transforms.RandomVerticalFlip(p=0.5),
+            transforms.RandomHorizontalFlip(p=0.5),
         ])
 
     def setup(self, stage: str = None):
@@ -142,9 +148,9 @@ class BalancedMatchDataModule(pl.LightningDataModule):
         """
         if stage == "fit" or stage is None:
             # --- Setup for Training Data ---
-            pos_real_train = PositiveRealMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, erosion_size=(1, 10))
-            pos_synth_train = PositiveSyntheticMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, max_shift=30, pad=3)
-            neg_train = NegativeMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, max_shift=30, pad=3)
+            pos_real_train = PositiveRealMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, erosion_size=(1, 10), post_transform=self.train_post_transforms)
+            pos_synth_train = PositiveSyntheticMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, max_shift=10, pad=20, max_tangent_shift=10, post_transform=self.train_post_transforms)
+            neg_train = NegativeMatchDataset(self.train_root, transform=self.train_transforms, mask_transform=self.masks_transforms, max_shift=10, pad=20, post_transform=self.train_post_transforms)
 
             # Combine positive datasets
             pos_train = ConcatDataset([pos_real_train, pos_synth_train])
