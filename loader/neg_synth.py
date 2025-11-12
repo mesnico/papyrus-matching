@@ -11,12 +11,11 @@ from torchvision.transforms import functional as F
 from loader.base import BaseMatchDataset
 
 
-class PositiveSyntheticMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, image_ids: list[str], side=384, stride=32, transform=None, mask_transform=None, post_transform=None, perimeter_points=32, pad=15, max_shift=0, max_tangent_shift=0):
+class NegativeSyntheticMatchDataset(BaseMatchDataset):
+    def __init__(self, root_dir: Path, image_ids: list[str], side=384, stride=32, transform=None, mask_transform=None, post_transform=None, perimeter_points=32, pad=15, max_shift=0):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
         self.stride = stride
         self.max_shift = max_shift
-        self.max_tangent_shift = max_tangent_shift
         self.mask_transform = mask_transform
         self.post_transform = post_transform
 
@@ -80,18 +79,26 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
         return self.patches_cumsum[-1] * self.touch_cumsum[-1]
 
     def __getitem__(self, idx, pedantic=False):
-        patch_idx, touch_idx = divmod(idx, self.touch_cumsum[-1])
-
-        patch_image_idx = np.searchsorted(self.patches_cumsum, patch_idx, side='right')
-        patch_idx -= self.patches_cumsum[patch_image_idx - 1] if patch_image_idx > 0 else 0
+        patch_idx_1, touch_idx = divmod(idx, self.touch_cumsum[-1])
+        patch_image_idx_1 = np.searchsorted(self.patches_cumsum, patch_idx_1, side='right')
+        patch_idx_1 -= self.patches_cumsum[patch_image_idx_1 - 1] if patch_image_idx_1 > 0 else 0
 
         touch_image_idx = np.searchsorted(self.touch_cumsum, touch_idx, side='right')
         touch_idx -= self.touch_cumsum[touch_image_idx - 1] if touch_image_idx > 0 else 0
 
+        patch_idx_2, _ = divmod(int(idx + len(self) / 2) % len(self), self.touch_cumsum[-1])
+        patch_image_idx_2 = np.searchsorted(self.patches_cumsum, patch_idx_2, side='right')
+        patch_idx_2 -= self.patches_cumsum[patch_image_idx_2 - 1] if patch_image_idx_2 > 0 else 0
+
         # load image
-        image_id = self.image_ids[patch_image_idx]
-        rgba_path = self.root_dir / 'rgba' / f'{image_id}.png'
-        rgba = io.imread(rgba_path)
+        image_id_1 = self.image_ids[patch_image_idx_1]
+        rgba_path = self.root_dir / 'rgba' / f'{image_id_1}.png'
+        rgba_1 = io.imread(rgba_path)
+
+        # load another image
+        image_id_2 = self.image_ids[patch_image_idx_2]
+        rgba_path = self.root_dir / 'rgba' / f'{image_id_2}.png'
+        rgba_2 = io.imread(rgba_path)
 
         # get contours and touch points
         contours = self.contours[touch_image_idx]
@@ -99,13 +106,18 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
         a_idx, b_idx = int(a_idx), int(b_idx)
         a_contour, b_contour = contours[a_idx], contours[b_idx]
 
-        # get patch
-        origin = self.high_availability_patches[patch_image_idx][patch_idx]
+        # get first patch
+        origin = self.high_availability_patches[patch_image_idx_1][patch_idx_1]
         y0, x0 = origin
-        crop_rgba = rgba[y0:y0 + self.side, x0:x0 + self.side]
+        crop_rgba_1 = rgba_1[y0:y0 + self.side, x0:x0 + self.side]
+
+        # get second patch
+        origin = self.high_availability_patches[patch_image_idx_2][patch_idx_2]
+        y0, x0 = origin
+        crop_rgba_2 = rgba_2[y0:y0 + self.side, x0:x0 + self.side]
 
         # move contours and draw them on the patch
-        shape = crop_rgba.shape
+        shape = crop_rgba_1.shape
         half_side = self.side // 2
         half_delta = delta / 2
         shift_magnitude = ((np.random.rand() * 2) - 1) * self.max_shift
@@ -131,43 +143,18 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
         mask_b[b_dst_y, b_dst_x] = True
 
         if False:  # debug
-            print(f'{image_id=} {patch_image_idx=} {touch_image_idx=} {patch_idx=} {touch_idx=} {a_idx=} {b_idx=}')
+            print(f'{image_id_1=} {patch_image_idx_1=} {touch_image_idx=} {patch_idx=} {touch_idx=} {a_idx=} {b_idx=}')
             print(f'  {y0=} {x0=} {a_contact=} {b_contact=} {delta=} {t_a=} {t_b=}')
 
             # draw moved contours as debug
             yy, xx = draw.polygon_perimeter(moved_a_contour[:, 0], moved_a_contour[:, 1], shape=shape)
-            crop_rgba[yy, xx] = [255, 0, 0, 255]
+            crop_rgba_1[yy, xx] = [255, 0, 0, 255]
             yy, xx = draw.polygon_perimeter(moved_b_contour[:, 0], moved_b_contour[:, 1], shape=shape)
-            crop_rgba[yy, xx] = [0, 255, 0, 255]
+            crop_rgba_1[yy, xx] = [0, 255, 0, 255]
 
         if self.transform:
-            # 1. Generate a random 2D translation (dx, dy)
-            #    We'll apply this shift to piece B.
-            shift_vector = delta * shift_magnitude
-            dx, dy = int(shift_vector[1]), int(shift_vector[0])  # note: (dy, dx) order
-            orthogonal_delta = np.array([-delta[1], delta[0]])
-            tangent_rgba_shift = orthogonal_delta * (((np.random.rand() * 2) - 1) * self.max_tangent_shift)
-            dx += int(tangent_rgba_shift[1])
-            dy += int(tangent_rgba_shift[0])
-
-            # 2. Apply the base transform to get the original, un-shifted tensor
-            transformed_rgba_for_shift = self.transform(crop_rgba)
-            transformed_rgba = self.transform(crop_rgba)
-
-            # 3. Create a shifted version of the image tensor for piece B
-            #    We use F.affine for an efficient translation.
-            #    This shifts the image content but keeps the canvas size the same.
-            relative_scale_x = transformed_rgba_for_shift.shape[2] / crop_rgba.shape[1]
-            relative_scale_y = transformed_rgba_for_shift.shape[1] / crop_rgba.shape[0]
-            shifted_rgba = F.affine(transformed_rgba_for_shift,
-                                    angle=0,
-                                    translate=(int(dx * relative_scale_x), int(dy * relative_scale_y)),
-                                    scale=1.0,
-                                    shear=(0.0, 0.0),
-                                    # Use 'nearest' or 'bilinear'
-                                    interpolation=F.InterpolationMode.BILINEAR,
-                                    # Fill with 0 (transparent black)
-                                    fill=0.0) 
+            transformed_rgba_1 = self.transform(crop_rgba_1)
+            transformed_rgba_2 = self.transform(crop_rgba_2)
 
             # 4. Transform the masks (as before)
             mask_a = self.mask_transform(mask_a[:, :, None].astype(np.float32))
@@ -175,28 +162,28 @@ class PositiveSyntheticMatchDataset(BaseMatchDataset):
 
             # 5. Apply masks to the *different* image versions
             #    Piece A uses the original, un-shifted image
-            crop_a = transformed_rgba * mask_a
+            crop_a = transformed_rgba_1 * mask_a
             #    Piece B uses the new, shifted image
-            crop_b = shifted_rgba * mask_b
+            crop_b = transformed_rgba_2 * mask_b
 
             # 6. Combine the two pieces
-            crop_rgba = torch.maximum(crop_a, crop_b)
+            crop_rgba_1 = torch.maximum(crop_a, crop_b)
         else:
             raise NotImplementedError("Transform must be provided for PositiveSyntheticMatchDataset")
             mask = mask_a | mask_b
-            crop_rgba *= mask[:, :, None]
-            crop_rgba = torch.tensor(crop_rgba).permute(2, 0, 1).float() / 255.0
+            crop_rgba_1 *= mask[:, :, None]
+            crop_rgba_1 = torch.tensor(crop_rgba_1).permute(2, 0, 1).float() / 255.0
 
             # crop_mask = self.transform(crop_mask)
 
         # ensure when the alpha is zero, the rgb is also zero
-        zero_alpha = crop_rgba[3, :, :] == 0
-        crop_rgba[:3, zero_alpha] = 0
+        zero_alpha = crop_rgba_1[3, :, :] == 0
+        crop_rgba_1[:3, zero_alpha] = 0
 
         if self.post_transform:
-            crop_rgba = self.post_transform(crop_rgba)
+            crop_rgba_1 = self.post_transform(crop_rgba_1)
 
-        return crop_rgba
+        return crop_rgba_1
 
 if __name__ == "__main__":
 
@@ -236,7 +223,7 @@ if __name__ == "__main__":
         T.RandomVerticalFlip(p=0.5),
         T.RandomHorizontalFlip(p=0.5),
     ])
-    dset = PositiveSyntheticMatchDataset(root, pad=20, max_shift=0, max_tangent_shift=0, transform=transf, mask_transform=mask_transf, post_transform=post_transforms)
+    dset = NegativeSyntheticMatchDataset(root, pad=20, max_shift=0, transform=transf, mask_transform=mask_transf, post_transform=post_transforms)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
@@ -252,9 +239,9 @@ if __name__ == "__main__":
         sample_rgba[rr, cc] = [255, 0, 0, 255]
 
         # Save the sample images
-        Path('figures/synth_pos_samples').mkdir(parents=True, exist_ok=True)
-        io.imsave(f'figures/synth_pos_samples/sample_{i:02d}rgba.png', sample_rgba)
+        Path('figures/synth_neg_samples').mkdir(parents=True, exist_ok=True)
+        io.imsave(f'figures/synth_neg_samples/sample_{i:02d}rgba.png', sample_rgba)
 
         # Save the alpha channel separately for visualization
         alpha_channel = sample_rgba[:, :, 3]
-        # io.imsave(f'figures/synth_pos_samples/sample_{i:02d}alpha.png', alpha_channel)
+        # io.imsave(f'figures/synth_neg_samples/sample_{i:02d}alpha.png', alpha_channel)

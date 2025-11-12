@@ -135,8 +135,7 @@ def main(args):
     run_dir = 'runs/'
 
     dm = BalancedMatchDataModule(
-        train_root='data/organized',
-        val_root='data/organized_test',
+        data_root='data/unified',
         batch_size=args['batch_size'],
         num_workers=8,
     )
@@ -166,7 +165,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Papyrus Match Scorer')
     parser.add_argument('-e', '--epochs', type=int, default=30, help='number of training epochs')
-    parser.add_argument('-b', '--batch_size', type=int, default=16, help='batch size')
+    parser.add_argument('-b', '--batch_size', type=int, default=24, help='batch size')
     parser.add_argument('-r', '--resume', default=False, action='store_true', help='resume training')
 
     args = parser.parse_args()

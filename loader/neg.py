@@ -14,13 +14,13 @@ from loader import utils
 
 
 class NegativeMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, post_transform=None, perimeter_points=32, pad=15, max_shift=0):
+    def __init__(self, root_dir: Path, image_ids: list[str], side=384, transform=None, mask_transform=None, post_transform=None, perimeter_points=32, pad=15, max_shift=0):
         super().__init__(root_dir, side, transform, perimeter_points, pad)
         self.mask_transform = mask_transform
         self.post_transform = post_transform
         self.max_shift = max_shift
         
-        self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))  # Adjust the glob pattern as needed
+        self.image_ids = image_ids
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
 
         if False:
@@ -143,7 +143,7 @@ if __name__ == "__main__":
 
     # exit()
     
-    root = 'data/organized'
+    root = 'data/organized_test'
     from torchvision import transforms as T
     from torchvision.transforms import v2 as T2
     transf = T.Compose([
@@ -186,6 +186,7 @@ if __name__ == "__main__":
         sample_rgba[rr, cc] = [255, 0, 0, 255]
 
         # Save the sample images
+        os.makedirs('figures/neg_samples', exist_ok=True)
         io.imsave(f'figures/neg_samples/sample_{i:02d}rgba.png', sample_rgba)
 
         # Save the alpha channel separately for visualization

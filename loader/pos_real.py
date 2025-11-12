@@ -15,14 +15,14 @@ from loader import utils
 
 
 class PositiveRealMatchDataset(BaseMatchDataset):
-    def __init__(self, root_dir: Path, side=384, transform=None, mask_transform=None, post_transform=None, erosion_size=0):
+    def __init__(self, root_dir: Path, image_ids: list[str], side=384, transform=None, mask_transform=None, post_transform=None, erosion_size=0):
         super().__init__(root_dir, side, transform)
         
         self.mask_transform = mask_transform
         self.erosion_size = erosion_size
         self.post_transform = post_transform
 
-        self.image_ids = sorted(p.stem for p in (self.root_dir / 'rgba').glob('*.png'))  # Adjust the glob pattern as needed
+        self.image_ids = image_ids
         self.image_ids = [i for i in self.image_ids if self.check_image(i)]
 
         self.contact_points = [self.get_contact_points(i) for i in tqdm(self.image_ids)]
