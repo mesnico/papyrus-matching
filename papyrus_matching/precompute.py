@@ -214,30 +214,36 @@ if __name__ == "__main__":
     # 1. Define your parameters
     FRAGMENT_DIR = "data/for_inference"
     MODEL_PATH = "runs/lightning_logs/version_0/checkpoints/epoch=3-step=2576.ckpt"
-    OUTPUT_DIR = "results/fragment_scores"
+    OUTPUT_DIR = "results"
     NUM_WORKERS = 4 # Adjust based on your available GPUs/CPU cores
+    SKIP_EXISTING = True
     
-    # 2. Find all your fragment images
-    # Assumes fragments are PNG files. Adjust glob pattern as needed.
-    fragment_files = [f for f in glob.glob(f"{FRAGMENT_DIR}/*.png") if "_back" not in f.lower()]
-    
-    if len(fragment_files) < 2:
-        print(f"Error: Found fewer than 2 fragments in {FRAGMENT_DIR}. Need at least 2 to form a pair.")
-    else:
-        print(f"Found {len(fragment_files)} fragments.")
+    for side in ["recto", "verso"]:
+        # Assumes fragments are PNG files. Adjust glob pattern as needed.
+        if side == "verso":
+            fragment_files = [f for f in glob.glob(f"{FRAGMENT_DIR}/*.png") if "_back" in f.lower()]
+        else:
+            fragment_files = [f for f in glob.glob(f"{FRAGMENT_DIR}/*.png") if "_back" not in f.lower()]
+
+        fragment_files.sort()
         
-        # 3. Initialize the matcher
-        matcher = FragmentMatcher(
-            model_path=MODEL_PATH,
-            output_dir=OUTPUT_DIR,
-            pad=25,
-            perimeter_points=100,
-            base_device="cuda", # Use "cuda" or "cpu"
-        )
-        
-        # 4. Run the process
-        matcher.run_all_pairs(
-            fragment_paths=fragment_files,
-            num_workers=NUM_WORKERS,
-            skip_existing=True
-        )
+        if len(fragment_files) < 2:
+            print(f"Error: Found fewer than 2 fragments in {FRAGMENT_DIR}. Need at least 2 to form a pair.")
+        else:
+            print(f"Found {len(fragment_files)} fragments.")
+            
+            # 3. Initialize the matcher
+            matcher = FragmentMatcher(
+                model_path=MODEL_PATH,
+                output_dir=Path(OUTPUT_DIR) / side,
+                pad=20,
+                perimeter_points=100,
+                base_device="cuda", # Use "cuda" or "cpu"
+            )
+            
+            # 4. Run the process
+            matcher.run_all_pairs(
+                fragment_paths=fragment_files,
+                num_workers=NUM_WORKERS,
+                skip_existing=True
+            )
