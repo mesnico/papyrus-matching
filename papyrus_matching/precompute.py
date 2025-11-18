@@ -96,7 +96,7 @@ class FragmentMatcher:
                     scores = encoder(patches_imgs)
                     scores = torch.sigmoid(scores).squeeze(-1).cpu() # (N, 1) -> (N,)
                 
-                # **MODIFIED**: Store individual scores and their IDs
+                # Store individual scores and their IDs
                 if scores.numel() > 0:
                     scores_np = scores.numpy()
                     all_patch_scores.extend(scores_np.tolist())
@@ -209,14 +209,23 @@ class FragmentMatcher:
 
 if __name__ == "__main__":
     import glob
+    import argparse
     # This block is essential for multiprocessing
     
-    # 1. Define your parameters
-    FRAGMENT_DIR = "data/for_inference"
-    MODEL_PATH = "runs/lightning_logs/version_0/checkpoints/epoch=3-step=2576.ckpt"
-    OUTPUT_DIR = "results"
-    NUM_WORKERS = 4 # Adjust based on your available GPUs/CPU cores
-    SKIP_EXISTING = True
+    # 1. Define your parameters using argparse
+    parser = argparse.ArgumentParser(description="Fragment Matcher Parameters")
+    parser.add_argument('fragment_dir', type=str, help='Directory containing fragment images')
+    parser.add_argument('--model_path', type=str, default="runs/lightning_logs/version_0/checkpoints/epoch=3-step=2576.ckpt", help='Path to the model checkpoint')
+    parser.add_argument('--output_dir', type=str, default="results", help='Directory to save output results')
+    parser.add_argument('--skip_existing', type=bool, default=True, help='Skip existing output files')
+    args = parser.parse_args()
+
+    FRAGMENT_DIR = args.fragment_dir
+    MODEL_PATH = args.model_path
+    OUTPUT_DIR = Path(args.output_dir) / (Path(FRAGMENT_DIR).stem)
+    SKIP_EXISTING = args.skip_existing
+
+    NUM_WORKERS = 12 # Adjust based on your available GPUs/CPU cores
     
     for side in ["recto", "verso"]:
         # Assumes fragments are PNG files. Adjust glob pattern as needed.
@@ -235,10 +244,10 @@ if __name__ == "__main__":
             # 3. Initialize the matcher
             matcher = FragmentMatcher(
                 model_path=MODEL_PATH,
-                output_dir=Path(OUTPUT_DIR) / side,
+                output_dir=OUTPUT_DIR / side,
                 pad=20,
                 perimeter_points=100,
-                base_device="cuda", # Use "cuda" or "cpu"
+                base_device="cuda" if torch.cuda.is_available() else "cpu"
             )
             
             # 4. Run the process
