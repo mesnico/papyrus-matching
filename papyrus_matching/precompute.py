@@ -17,7 +17,7 @@ class FragmentMatcher:
     found in a given directory.
     """
     
-    def __init__(self, model_path, output_dir, pad=25, perimeter_points=100, base_device="cuda"):
+    def __init__(self, model_path, output_dir, pad=25, perimeter_points_distance=32, base_device="cuda"):
         """
         Initializes the matcher with model and dataset parameters.
 
@@ -32,7 +32,7 @@ class FragmentMatcher:
         self.model_path = model_path
         self.output_dir = Path(output_dir)
         self.pad = pad
-        self.perimeter_points = perimeter_points
+        self.perimeter_points_distance = perimeter_points_distance
         self.base_device = base_device
         
         # Create output directory
@@ -60,7 +60,7 @@ class FragmentMatcher:
                 fragment_a_path, 
                 fragment_b_path, 
                 pad=self.pad, 
-                perimeter_points=self.perimeter_points, 
+                perimeter_points_distance=self.perimeter_points_distance, 
                 transform=self.transf, 
                 mask_transform=self.mask_transf
             )
@@ -68,7 +68,7 @@ class FragmentMatcher:
             if len(dset) == 0:
                 return f"Skipped (empty dataset): {os.path.basename(fragment_a_path)}-{os.path.basename(fragment_b_path)}"
                 
-            # **MODIFIED**: Store all individual patch scores and their translation IDs
+            # Store all individual patch scores and their translation IDs
             all_patch_scores = []
             all_t_relatives = []
             all_a_coords = []

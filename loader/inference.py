@@ -2,27 +2,32 @@ import numpy as np
 from skimage import io, draw, measure, morphology
 from matplotlib import pyplot as plt
 import torch
-
-from loader.base import BaseMatchDataset
 from loader import utils
-import tqdm
-import time
 import os
 import itertools
 from multiprocessing import Pool
 from scipy.spatial.distance import cdist
 
-from papyrus_matching.train import LitPapyrusTR
-
 def process_pair_extended(args):
-    i, j, a_contour, b_contour, perimeter_points, pad = args
+    i, j, a_contour, b_contour, perimeter_points_distance, pad = args
     other_valid_contacts_threshold = 100
 
-    a_points = np.linspace(0, len(a_contour), perimeter_points, endpoint=False, dtype=int)
-    b_points = np.linspace(0, len(b_contour), perimeter_points, endpoint=False, dtype=int)
+    # segment lenghts
+    def get_sampling_indexes(contour):
+        subsample = 3
+        contour = contour[::subsample]  # to avoid discretization issues
+        lenghts = np.linalg.norm(contour[1:] - contour[:-1], axis=1)
+        lenghts = np.insert(lenghts, 0, 0.0)
+        cumsum_length = np.cumsum(lenghts)
+        samples = range(0, int(cumsum_length[-1]), perimeter_points_distance)
+        indexes = np.searchsorted(cumsum_length, samples) * subsample
+        return indexes
+    
+    a_indexes = get_sampling_indexes(a_contour)
+    b_indexes = get_sampling_indexes(b_contour)
 
-    a_contact_points = a_contour[a_points]
-    b_contact_points = b_contour[b_points]
+    a_contact_points = a_contour[a_indexes]
+    b_contact_points = b_contour[b_indexes]
 
     a_centroid = utils.contour_centroid(a_contour)
     b_centroid = utils.contour_centroid(b_contour)
@@ -69,11 +74,11 @@ def process_pair_extended(args):
 
 
 class InferenceDataset(torch.utils.data.Dataset):
-    def __init__(self, rgba_path_a, rgba_path_b, side=384, transform=None, mask_transform=None, perimeter_points=64, pad=15, return_final_image=False):
+    def __init__(self, rgba_path_a, rgba_path_b, side=384, transform=None, mask_transform=None, perimeter_points_distance=64, pad=15, return_final_image=False):
         self.mask_transform = mask_transform
         self.transform = transform
         self.side = side
-        self.perimeter_points = perimeter_points
+        self.perimeter_points_distance = perimeter_points_distance
         self.pad = pad
         self.rgba_path_a = rgba_path_a
         self.rgba_path_b = rgba_path_b
@@ -153,7 +158,7 @@ class InferenceDataset(torch.utils.data.Dataset):
 
         # Create a single pair to process: (idx_a, idx_b, contour_a, contour_b, ...)
         # We use 0 and 1 as the dummy indices
-        pairs = [(0, 1, contour_a, contour_b, self.perimeter_points, pad)]
+        pairs = [(0, 1, contour_a, contour_b, self.perimeter_points_distance, pad)]
         
         # with Pool(os.cpu_count()) as pool:
         data = [process_pair_extended(p) for p in pairs] #pool.map(process_pair_extended, pairs)
@@ -316,7 +321,7 @@ class InferenceDataset(torch.utils.data.Dataset):
     
 
 if __name__ == "__main__":
-    root = 'data/for_inference'
+    root = 'data/toy_fragments'
     image_name_a = root + "/test_fragment_easy1_L.png"
     image_name_b = root + "/test_fragment_easy1_R.png"
 
@@ -329,7 +334,7 @@ if __name__ == "__main__":
         T.ToTensor(),
         T.Resize((224, 224)),
     ])
-    dset = InferenceDataset(image_name_a, image_name_b, pad=25, perimeter_points=64, transform=transf, mask_transform=mask_transf)
+    dset = InferenceDataset(image_name_a, image_name_b, pad=20, perimeter_points_distance=128, transform=transf, mask_transform=mask_transf)
 
     output_path = 'figures/inference_samples'
     os.makedirs(output_path, exist_ok=True)
