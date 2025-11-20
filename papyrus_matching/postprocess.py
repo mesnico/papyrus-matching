@@ -273,10 +273,15 @@ def merge_pair(recto_path, verso_path, output_path):
         print(f"Failed to process pair {Path(recto_path).name}: {e}")
 
 def main():
-    BASE_DIR = Path("results")
-    RECTO_DIR = BASE_DIR / "recto"
-    VERSO_DIR = BASE_DIR / "verso"
-    MERGED_DIR = BASE_DIR / "merged"
+    import argparse
+    parser = argparse.ArgumentParser(description="Fragment Matcher Parameters")
+    parser.add_argument('results_dir', type=str, help='Directory containing results for recto and verso')
+    args = parser.parse_args()
+
+    results_dir = Path(args.results_dir)
+    RECTO_DIR = results_dir / "recto"
+    VERSO_DIR = results_dir / "verso"
+    MERGED_DIR = results_dir / "merged"
     
     # Create output directory
     MERGED_DIR.mkdir(parents=True, exist_ok=True)
