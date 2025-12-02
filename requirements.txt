@@ -11,3 +11,4 @@ h5py
 shapely
 numpy==1.26.4
 tensorboard
+opencv-python

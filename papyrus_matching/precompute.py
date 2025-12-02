@@ -234,6 +234,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', type=str, default="runs/lightning_logs/version_0/checkpoints/epoch=3-step=2576.ckpt", help='Path to the model checkpoint')
     parser.add_argument('--output_dir', type=str, default="results", help='Directory to save output results')
     parser.add_argument('--skip_existing', type=bool, default=True, help='Skip existing output files')
+    parser.add_argument('--num-workers', type=int, default=24, help="Num workers to use")
     args = parser.parse_args()
 
     FRAGMENT_DIR = args.fragment_dir
@@ -241,7 +242,7 @@ if __name__ == "__main__":
     OUTPUT_DIR = Path(args.output_dir) / (Path(FRAGMENT_DIR).stem)
     SKIP_EXISTING = args.skip_existing
 
-    NUM_WORKERS = 48 # Adjust based on your available GPUs/CPU cores
+    NUM_WORKERS = args.num_workers # Adjust based on your available GPUs/CPU cores
     
     for side in ["recto", "verso"]:
         # Assumes fragments are PNG files. Adjust glob pattern as needed.
