@@ -8,7 +8,7 @@ from tqdm import tqdm
 from skimage import io, draw, transform
 from torchvision.transforms import functional as F
 
-from loader.base import BaseMatchDataset
+from .base import BaseMatchDataset
 
 
 class NegativeSyntheticMatchDataset(BaseMatchDataset):

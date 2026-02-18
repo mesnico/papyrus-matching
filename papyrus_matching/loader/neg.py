@@ -9,8 +9,8 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from loader.base import BaseMatchDataset
-from loader import utils
+from .base import BaseMatchDataset
+from . import utils
 
 
 class NegativeMatchDataset(BaseMatchDataset):

@@ -9,8 +9,8 @@ import argparse
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms as T
-from .train import LitPapyrusTR
-from loader.inference import InferenceDataset
+from papyrus_matching.train import LitPapyrusTR
+from papyrus_matching.loader.inference import InferenceDataset
 
 MODELS={
     'patch-encoder-v0-2-0.ckpt': 'https://github.com/mesnico/papyrus-matching/releases/download/v0.2.0/patch-encoder-v0-2-0.ckpt',
@@ -219,7 +219,7 @@ class FragmentMatcher:
         print(f"\nAll fragment pairs processed. Results saved to {self.output_dir}")
 
 
-if __name__ == "__main__":
+def main():
     import glob
     import argparse
     # This block is essential for multiprocessing
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     # Define your parameters using argparse
     parser = argparse.ArgumentParser(description="Fragment Matcher Parameters")
     parser.add_argument('fragment_dir', type=str, help='Directory containing fragment images')
-    parser.add_argument('--model_name', type=str, default="patch-encoder-v0-2-0.ckpt", help='Path to the model checkpoint (.pth)')
+    parser.add_argument('--model_name', type=str, default="patch-encoder-v0-2-0.ckpt", help='Path to the model checkpoint (.ckpt)')
     parser.add_argument('--output_dir', type=str, default="results", help='Directory to save output results')
     parser.add_argument('--skip_existing', type=bool, default=True, help='Skip existing output files')
     parser.add_argument('--num-workers', type=int, default=24, help="Num workers to use")
@@ -269,3 +269,6 @@ if __name__ == "__main__":
                 num_workers=NUM_WORKERS,
                 skip_existing=True
             )
+
+if __name__ == "__main__":
+    main()

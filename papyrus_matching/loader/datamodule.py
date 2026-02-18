@@ -6,11 +6,11 @@ from torchvision.transforms import v2 as T2
 from typing import List, Iterator
 import numpy as np
 
-from loader.pos_real import PositiveRealMatchDataset
-from loader.pos_synth import PositiveSyntheticMatchDataset
-from loader.neg import NegativeMatchDataset
-from loader.neg_synth import NegativeSyntheticMatchDataset
-from loader import utils
+from .pos_real import PositiveRealMatchDataset
+from .pos_synth import PositiveSyntheticMatchDataset
+from .neg import NegativeMatchDataset
+from .neg_synth import NegativeSyntheticMatchDataset
+from . import utils
 
 
 # =============================================================================

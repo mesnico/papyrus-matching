@@ -1,12 +1,10 @@
-jupyter
 pandas
-pytorch-lightning
+pytorch-lightning==2.5.5
 scikit-image
-scikit-learn
+scikit-learn==1.7.2
 scikit-learn-extra
-seaborn
-torchmetrics
-torchvision
+torchmetrics==1.8.2
+torchvision==0.23.0
 h5py
 shapely
 numpy==1.26.4

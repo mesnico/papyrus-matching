@@ -21,4 +21,12 @@ setup(
     license="MIT",
     packages=["papyrus_matching"],
     install_requires=parse_requirements("requirements.txt"),
+    entry_points={
+        'console_scripts': [
+            # command_name = package.module:function
+            'compute = papyrus_matching.precompute:main',
+            'postprocess = papyrus_matching.postprocess:main',
+            'crop_fragments = papyrus_matching.data.crop_fragments:main',
+        ],
+    },
 )

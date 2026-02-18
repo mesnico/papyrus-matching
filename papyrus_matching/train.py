@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torchvision import models
 import torchmetrics.functional as tm
 
-from loader.datamodule import BalancedMatchDataModule
+from .loader.datamodule import BalancedMatchDataModule
 
 
 # https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision

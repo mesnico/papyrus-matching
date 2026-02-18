@@ -2,11 +2,12 @@ import numpy as np
 from skimage import io, draw, measure, morphology
 from matplotlib import pyplot as plt
 import torch
-from loader import utils
 import os
 import itertools
 from multiprocessing import Pool
 from scipy.spatial.distance import cdist
+
+from . import utils
 
 def process_pair_extended(args):
     i, j, a_contour, b_contour, perimeter_points_distance, pad = args
