@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 def readme():
     with open('README.md') as f:
@@ -19,7 +19,7 @@ setup(
     author="Nicola Messina, Fabio Carrara",
     author_email="nicola.messina@isti.cnr.it, fabio.carrara@isti.cnr.it",
     license="MIT",
-    packages=["papyrus_matching"],
+    packages=find_packages(),
     install_requires=parse_requirements("requirements.txt"),
     entry_points={
         'console_scripts': [
