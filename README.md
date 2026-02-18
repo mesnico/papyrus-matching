@@ -1,25 +1,73 @@
 # Papyrus Fragment Matching with Deep Learning
 
-## Getting Started
+Papyrus Fragment Matching is an experimental tool for finding matches between fragments of ancient papyrus. It produces files that can be imported into [JoinPap](https://github.com/cnr-isti-vclab/JoinPap) for visualizing the most promising fragment matchings.
 
-```bash
-pip install git+https://github.com/fabiocarrara/papyrus-matching.git
+This software is devoped within the PRIN PNRR 2022 project [Reconstructing Fragmentary Papyri through Human-Machine Interaction](https://www.joinpap.unifi.it/),
+a joint effort between the Istituto Papirologico "Girolamo Vitelli" in Florence, and the Istituto di Scienza e Tecnologie dell'Informazione "A. Faedo" of the National Research Council (ISTI-CNR), Pisa.
+
+## Requirements
+
+- Python 3.10
+- **[Highly Recommended]** A device with CUDA GPUs to accelerate the computation and at least 24 CPU cores and 64GB of RAM
+
+## Installation
+
+We suggest to employ virtual environments to contain all the dependencies:
+
+```cmd
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Then, the tools can be installed as follows:
+```cmd
+pip install git+https://github.com/mesnico/papyrus-matching.git
 ```
 
 ## Usage
-```python
-from skiamge.io import imread
-from papyrus_matching import FragmentMatcher
 
-# fragments must be RGBA, i.e., (H,W,4)-shaped uint8 np.array with values in [0, 255]
-fragL = imread('left_fragment.png')
-fragR = imread('right_fragment.png')
+### 1. Data preparation
 
-matcher = FragmentMatcher()
-posL, posR, scored_displacements, scoresLR = matcher.match(fragL, fragR)
+The tool assumes fragments are contained in `.png` file format into a folder, and each fragment comes with the recto and verso images, following the convention: `filename.png` for recto and `filename_back.png` for verso.
+
+You can find an example in folder [TODO]. 
+
+> Be aware that we assume the fragments are properly scanned, masked, and recto/verso aligned consistently before using this software. 
+
+> Note that jpg is not a suitable format because alpha channel (used for properly cropping the fragments) cannot be stored.
+
+If the recto/verso are not properly cropped (they have transparent margins that extend beyond the area of the fragment), you can use the following script to automatically crop them:
+
+```
+crop_fragments my_fragments
 ```
 
-Outputs:
- - `posL`, `posR`: (top, left) positions of patches analyzed in the left and right fragment.
- - `scored_displacements`: a (`int` -> `float`) dict mapping a vertical displacement between the two fragments to its score. E.g., `scored_displacements[4]` gives the matching score of the two fragments when displaced vertically by `4 * matcher.stride`. Positive displacements means the right fragment is moved up w.r.t. the left fragment.
- - `scoresLR`: a (`len(posL)`, `len(posR)`)-shaped matrix containing all the matching scores between left and right patches.
+where `my_fragments` is an example name of the directory where the images are stored.
+This command will create a new folder in the same directory called `my_fragments_cropped`.
+
+### 2. Analyzing all fragment pairs
+This is a very computationally intensive task. We have, for each pair, to analyze all the possible translations of fragment A into fragment B to understand where and if they can match at certain positions. This is done for both recto and verso sides.
+
+```
+compute my_fragments_cropped --output_dir results
+```
+
+### 3. Merge the analysis of recto and verso
+The final step is to merge the results obtained from recto and verso sides:
+
+```
+postprocess results/my_fragments_cropped
+```
+
+### 4. Importing into JoinPap
+In JoinPap:
+- load the fragments stored in `my_fragments` folder
+- open the AI tool interface (robot icon)
+- browse to `results/my_fragments_cropped` directory and select it.
+- wait for the results to appear
+
+## Training
+
+This repository also contains the code for training a custom version of the matching model.
+
+> The instructions on this functionality will be released soon
