@@ -4,26 +4,17 @@ import torch
 import numpy as np
 import itertools
 import tqdm
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
-from torchvision import transforms as T
-from papyrus_matching.train import LitPapyrusTR
-from loader.inference import InferenceDataset
-
-
-import os
-import h5py
-import torch
-import numpy as np
-import itertools
-import tqdm
 import glob
 import argparse
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms as T
-from papyrus_matching.train import LitPapyrusTR
+from .train import LitPapyrusTR
 from loader.inference import InferenceDataset
+
+MODELS={
+    'patch-encoder-v0-2-0.ckpt': 'https://github.com/mesnico/papyrus-matching/releases/download/v0.2.0/patch-encoder-v0-2-0.ckpt',
+}
 
 # ---------------------------------------------------------
 # 1. The Worker Class (CPU Heavy Lifting)
@@ -120,8 +111,8 @@ def collate_fn(batch):
 # 2. The Matcher Class (Main Process / GPU)
 # ---------------------------------------------------------
 class FragmentMatcher:
-    def __init__(self, model_path, output_dir, pad=25, perimeter_points_distance=32, base_device="cuda"):
-        self.model_path = model_path
+    def __init__(self, model_name, output_dir, pad=25, perimeter_points_distance=32, base_device="cuda"):
+        self.model_path = Path(model_name)
         self.output_dir = Path(output_dir)
         self.pad = pad
         self.perimeter_points_distance = perimeter_points_distance
@@ -131,6 +122,11 @@ class FragmentMatcher:
         
         self.transf = T.Compose([T.ToTensor(), T.Resize((224, 224))])
         self.mask_transf = T.Compose([T.ToTensor(), T.Resize((224, 224))])
+
+        # download the model if not provided
+        if not self.model_path.exists():
+            torch.hub.download_url_to_file(MODELS[model_name], self.model_path)
+
 
     def run_all_pairs(self, fragment_paths, num_workers=4, skip_existing=True):
         # 1. Prepare Pairs
@@ -228,17 +224,17 @@ if __name__ == "__main__":
     import argparse
     # This block is essential for multiprocessing
     
-    # 1. Define your parameters using argparse
+    # Define your parameters using argparse
     parser = argparse.ArgumentParser(description="Fragment Matcher Parameters")
     parser.add_argument('fragment_dir', type=str, help='Directory containing fragment images')
-    parser.add_argument('--model_path', type=str, default="runs/lightning_logs/version_0/checkpoints/epoch=3-step=2576.ckpt", help='Path to the model checkpoint')
+    parser.add_argument('--model_name', type=str, default="patch-encoder-v0-2-0.ckpt", help='Path to the model checkpoint (.pth)')
     parser.add_argument('--output_dir', type=str, default="results", help='Directory to save output results')
     parser.add_argument('--skip_existing', type=bool, default=True, help='Skip existing output files')
     parser.add_argument('--num-workers', type=int, default=24, help="Num workers to use")
     args = parser.parse_args()
 
     FRAGMENT_DIR = args.fragment_dir
-    MODEL_PATH = args.model_path
+    MODEL_NAME = args.model_name
     OUTPUT_DIR = Path(args.output_dir) / (Path(FRAGMENT_DIR).stem)
     SKIP_EXISTING = args.skip_existing
 
@@ -260,7 +256,7 @@ if __name__ == "__main__":
             
             # 3. Initialize the matcher
             matcher = FragmentMatcher(
-                model_path=MODEL_PATH,
+                model_name=MODEL_NAME,
                 output_dir=OUTPUT_DIR / side,
                 pad=20,
                 perimeter_points_distance=100,

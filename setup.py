@@ -5,16 +5,20 @@ def readme():
         README = f.read()
     return README
 
+def parse_requirements(filename):
+    with open(filename, "r") as f:
+        return [line.strip() for line in f if line.strip() and not line.startswith("#")]
+
 setup(
     name="papyrus-matching",
-    version="0.1.0",
+    version="0.2.0",
     description="A Python package for matching papyrus fragments with Deep Learning.",
     long_description=readme(),
     long_description_content_type="text/markdown",
-    url="https://github.com/fabiocarrara/papyrus-matching",
-    author="Fabio Carrara",
-    author_email="fabio.carrara@isti.cnr.it",
+    url="https://github.com/mesnico/papyrus-matching",
+    author="Nicola Messina, Fabio Carrara",
+    author_email="nicola.messina@isti.cnr.it, fabio.carrara@isti.cnr.it",
     license="MIT",
     packages=["papyrus_matching"],
-    install_requires=["torch==1.11.0", "torchvision==0.12.0"],
+    install_requires=parse_requirements("requirements.txt"),
 )
