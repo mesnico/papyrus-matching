@@ -10,8 +10,8 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from skimage import io
 
-from .base import BaseMatchDataset
-from . import utils
+from papyrus_matching.loader.base import BaseMatchDataset
+from papyrus_matching.loader import utils
 
 
 class PositiveRealMatchDataset(BaseMatchDataset):
@@ -141,25 +141,36 @@ if __name__ == "__main__":
     # exit()
 
     from skimage import draw
-    root = 'data/organized'
+    root = 'data/unified'
     from torchvision import transforms as T
-    from loader import utils
+    from torchvision.transforms import v2 as T2
     transf = T.Compose([
-        T.ToTensor(),
-        T.Resize((224, 224)),
+        T2.ToImage(),
+        utils.ApplyToRGB(
+            T2.JPEG(quality=(20, 100)),
+        ),
+        utils.ApplyToRGB(
+            T2.RandomPosterize(bits=4, p=0.2),
+        ),
         utils.ApplyToRGB(
             T.RandomGrayscale(p=0.2)
         ),
         utils.ApplyToRGB(
             T.ColorJitter(0.5, 0.5, 0.3, 0.1)
         ),
+        T2.ToDtype(torch.float32, scale=True),
     ])
-
     mask_transf = T.Compose([
         T.ToTensor(),
-        T.Resize((224, 224)),
     ])
-    dset = PositiveRealMatchDataset(root, transform=transf, mask_transform=mask_transf, erosion_size=4)
+    post_transf = T.Compose([
+        T.Resize((224, 224)),
+        T.RandomVerticalFlip(p=0.5),
+        T.RandomHorizontalFlip(p=0.5),
+    ])
+    with open(f'{root}/train.txt', 'r') as f:
+        train_images = f.read().splitlines()
+    dset = PositiveRealMatchDataset(root, train_images, transform=transf, mask_transform=mask_transf, erosion_size=(1, 10), post_transform=post_transf)
     print(len(dset))
     sample_rgba = dset[0]
     print(sample_rgba.shape)

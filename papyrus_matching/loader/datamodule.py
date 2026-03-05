@@ -6,11 +6,11 @@ from torchvision.transforms import v2 as T2
 from typing import List, Iterator
 import numpy as np
 
-from .pos_real import PositiveRealMatchDataset
-from .pos_synth import PositiveSyntheticMatchDataset
-from .neg import NegativeMatchDataset
-from .neg_synth import NegativeSyntheticMatchDataset
-from . import utils
+from papyrus_matching.loader.pos_real import PositiveRealMatchDataset
+from papyrus_matching.loader.pos_synth import PositiveSyntheticMatchDataset
+from papyrus_matching.loader.neg import NegativeMatchDataset
+from papyrus_matching.loader.neg_synth import NegativeSyntheticMatchDataset
+from papyrus_matching.loader import utils
 
 
 # =============================================================================
@@ -255,3 +255,31 @@ class BalancedMatchDataModule(pl.LightningDataModule):
             pin_memory=True,
             shuffle=False,
         )
+
+
+if __name__ == "__main__":
+    dm = BalancedMatchDataModule(
+        data_root='data/unified',
+        batch_size=6,
+        num_workers=8,
+    )
+    dm.setup('fit')
+    train_loader = dm.train_dataloader()
+    
+    # print statistics about positive and negative samples in training (breakdown of the various types)
+    real_pos_count = len(dm.train_pos_indices)
+    synth_pos_count = len(dm.train_pos_synth_indices)
+    real_neg_count = len(dm.train_neg_indices)
+    synth_neg_count = len(dm.train_neg_synth_indices)
+    print(f"Training dataset statistics:")
+    print(f"  Real Positives: {real_pos_count}")
+    print(f"  Synthetic Positives: {synth_pos_count}")
+    print(f"  Real Negatives: {real_neg_count}")
+    print(f"  Synthetic Negatives: {synth_neg_count}")
+    print(f"  Total samples: {len(dm.train_dataloader()) * dm.batch_size}")
+
+    # print the number of validation samples
+    print(f"Validation dataset statistics:")
+    print(f"  Total samples: {len(dm.val_dataset)}")
+
+    

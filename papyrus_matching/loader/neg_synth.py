@@ -8,7 +8,7 @@ from tqdm import tqdm
 from skimage import io, draw, transform
 from torchvision.transforms import functional as F
 
-from .base import BaseMatchDataset
+from papyrus_matching.loader.base import BaseMatchDataset
 
 
 class NegativeSyntheticMatchDataset(BaseMatchDataset):
@@ -29,8 +29,10 @@ class NegativeSyntheticMatchDataset(BaseMatchDataset):
         # Precompute high availability patches and contours for all images
         self.high_availability_patches = [self.get_high_availability_patches(i) for i in tqdm(self.image_ids, desc="Getting high availability patches")]
 
-        self.contours = [self.get_contours(i) for i in tqdm(self.image_ids, desc="Getting contours")]
-        self.touch_points = [self.get_all_touch_points(i, c, pad=self.pad, force=False) for i, c in zip(tqdm(self.image_ids, desc="Getting touch points"), self.contours)]
+        contours = [self.get_contours(i) for i in tqdm(self.image_ids, desc="Getting contours")]
+        image_ids_with_contours, contours = zip(*[ (i, c) for i, c in zip(self.image_ids, contours) if len(c) > 1 and len(c[1]) > 100])
+        self.contours = contours
+        self.touch_points = [self.get_all_touch_points(i, c, pad=self.pad, force=False) for i, c in zip(tqdm(image_ids_with_contours, desc="Getting touch points"), self.contours)]
 
         self.patches_lengths = [len(p) for p in self.high_availability_patches]
         self.touch_lengths = [len(t) for t in self.touch_points]
@@ -194,10 +196,10 @@ if __name__ == "__main__":
 
     # exit()
     
-    root = 'data/organized'
+    root = 'data/unified'
     from torchvision import transforms as T
     from torchvision.transforms import v2 as T2
-    from loader import utils
+    from papyrus_matching.loader import utils
     transf = T.Compose([
         T2.ToImage(),
         T2.Resize((224, 224)),
@@ -223,7 +225,9 @@ if __name__ == "__main__":
         T.RandomVerticalFlip(p=0.5),
         T.RandomHorizontalFlip(p=0.5),
     ])
-    dset = NegativeSyntheticMatchDataset(root, pad=20, max_shift=0, transform=transf, mask_transform=mask_transf, post_transform=post_transforms)
+    with open(f'{root}/train.txt', 'r') as f:
+        train_images = f.read().splitlines()
+    dset = NegativeSyntheticMatchDataset(root, train_images, pad=20, max_shift=10, transform=transf, mask_transform=mask_transf, post_transform=post_transforms)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 

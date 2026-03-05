@@ -9,8 +9,8 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .base import BaseMatchDataset
-from . import utils
+from papyrus_matching.loader.base import BaseMatchDataset
+from papyrus_matching.loader import utils
 
 
 class NegativeMatchDataset(BaseMatchDataset):
@@ -20,16 +20,18 @@ class NegativeMatchDataset(BaseMatchDataset):
         self.post_transform = post_transform
         self.max_shift = max_shift
         
-        self.image_ids = image_ids
-        self.image_ids = [i for i in self.image_ids if self.check_image(i)]
+        image_ids = [i for i in image_ids if self.check_image(i)]
 
         if False:
-            self.image_ids = self.image_ids[:5]
+            image_ids = image_ids[:5]
             print("[INFO] Using only first 5 images for testing purposes.")
 
-        self.contours = [self.get_contours(i) for i in tqdm(self.image_ids, desc="Getting contours")]
-        self.touch_points = [self.get_all_touch_points(i, c, pad=self.pad, force=False) for i, c in zip(tqdm(self.image_ids, desc="Getting touch points"), self.contours)]
-        self.touch_points = [self.filter_touch_points(i, t, self.side, force=True) for i, t in zip(tqdm(self.image_ids, desc="Filtering touch points"), self.touch_points)]
+        contours = [self.get_contours(i) for i in tqdm(image_ids, desc="Getting contours")]
+        image_ids_with_contours, contours = zip(*[ (i, c) for i, c in zip(image_ids, contours) if len(c) > 1 and len(c[1]) > 100])
+        self.contours = contours
+        self.touch_points = [self.get_all_touch_points(i, c, pad=self.pad, force=False) for i, c in zip(tqdm(image_ids_with_contours, desc="Getting touch points"), self.contours)]
+        self.touch_points = [self.filter_touch_points(i, t, self.side, force=True) for i, t in zip(tqdm(image_ids_with_contours, desc="Filtering touch points"), self.touch_points)]
+        self.image_ids = image_ids_with_contours
 
         lengths = [len(t) for t in self.touch_points]
         self.lengths_cumsum = np.cumsum(lengths)
@@ -143,7 +145,7 @@ if __name__ == "__main__":
 
     # exit()
     
-    root = 'data/organized_test'
+    root = 'data/unified'
     from torchvision import transforms as T
     from torchvision.transforms import v2 as T2
     transf = T.Compose([
@@ -170,12 +172,14 @@ if __name__ == "__main__":
         T.RandomVerticalFlip(p=0.5),
         T.RandomHorizontalFlip(p=0.5),
     ])
-    dset = NegativeMatchDataset(root, pad=20, max_shift=15, transform=transf, mask_transform=mask_transf, post_transform=post_transf)
+    with open(f'{root}/train.txt', 'r') as f:
+        train_images = f.read().splitlines()
+    dset = NegativeMatchDataset(root, train_images, pad=20, max_shift=10, transform=transf, mask_transform=mask_transf, post_transform=post_transf)
     sample_rgba = dset[0]
     print(sample_rgba.shape)
 
     rng = np.random.default_rng(42)
-    for i in rng.choice(len(dset), 10, replace=False):
+    for i in rng.choice(len(dset), 20, replace=False):
         sample_rgba = dset[i]
         sample_rgba = (sample_rgba.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         print(f"Sample {i}: RGBA shape {sample_rgba.shape}")
@@ -191,4 +195,4 @@ if __name__ == "__main__":
 
         # Save the alpha channel separately for visualization
         alpha_channel = sample_rgba[:, :, 3]
-        io.imsave(f'figures/neg_samples/sample_{i:02d}alpha.png', alpha_channel)
+        # io.imsave(f'figures/neg_samples/sample_{i:02d}alpha.png', alpha_channel)
