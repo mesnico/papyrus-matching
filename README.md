@@ -1,5 +1,7 @@
 # Papyrus Fragment Matching with Deep Learning
 
+![ScreenShot](inference.png)
+
 Papyrus Fragment Matching is an experimental tool for finding matches between fragments of ancient papyrus. It produces files that can be imported into [JoinPap](https://github.com/cnr-isti-vclab/JoinPap) for visualizing the most promising fragment matchings.
 
 This software is devoped within the PRIN PNRR 2022 project [Reconstructing Fragmentary Papyri through Human-Machine Interaction](https://www.joinpap.unifi.it/),
