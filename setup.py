@@ -27,6 +27,8 @@ setup(
             'compute = papyrus_matching.precompute:main',
             'postprocess = papyrus_matching.postprocess:main',
             'crop_fragments = papyrus_matching.data.crop_fragments:main',
+            'prepare_validation_set = papyrus_matching.prepare_validation_set:main',
+            'validate_pipeline = papyrus_matching.validate_pipeline:main',
         ],
     },
 )

@@ -1,4 +1,5 @@
 import os
+import csv
 import h5py
 import torch
 import numpy as np
@@ -39,6 +40,7 @@ class FragmentPairDataset(Dataset):
 
     def __getitem__(self, idx):
         path_a, path_b = self.pairs[idx]
+        # print(f"Worker processing pair: {Path(path_a).name} - {Path(path_b).name}")
         
         try:
             # Heavy CPU Operation: Create the inner dataset
@@ -107,6 +109,50 @@ def collate_fn(batch):
     # If None was returned (skipped), filtering happens in the main loop or here
     return batch[0]
 
+
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in {"1", "true", "yes", "y"}:
+        return True
+    if value in {"0", "false", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
+def normalize_fragment_name(name):
+    name = name.strip()
+    if not name:
+        return ""
+    return Path(name).stem
+
+
+def load_skip_pairs(csv_path):
+    if csv_path is None:
+        return set()
+
+    csv_path = Path(csv_path)
+    skip_pairs = set()
+
+    with open(csv_path, "r", newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        for row_idx, row in enumerate(reader, start=1):
+            names = [normalize_fragment_name(item) for item in row]
+            names = [name for name in names if name]
+
+            if not names or names[0].startswith("#"):
+                continue
+            if len(names) < 2:
+                print(f"[WARNING] Ignoring row {row_idx} in {csv_path}: expected at least two fragment names.")
+                continue
+
+            for name_a, name_b in itertools.combinations(names, 2):
+                skip_pairs.add(frozenset((name_a, name_b)))
+
+    print(f"Loaded {len(skip_pairs)} skipped pair(s) from {csv_path}")
+    return skip_pairs
+
 # ---------------------------------------------------------
 # 2. The Matcher Class (Main Process / GPU)
 # ---------------------------------------------------------
@@ -128,20 +174,30 @@ class FragmentMatcher:
             torch.hub.download_url_to_file(MODELS[model_name], self.model_path)
 
 
-    def run_all_pairs(self, fragment_paths, num_workers=4, skip_existing=True):
+    def run_all_pairs(self, fragment_paths, num_workers=4, skip_existing=True, skip_pairs=None):
+        skip_pairs = skip_pairs or set()
+
         # 1. Prepare Pairs
         all_pairs = list(itertools.combinations(fragment_paths, 2))
         
         # 2. Filter existing files BEFORE creating the dataset
         tasks_to_run = []
+        skipped_by_csv = 0
         for path_a, path_b in all_pairs:
             base_a = Path(path_a).stem
             base_b = Path(path_b).stem
             output_path = self.output_dir / f"{base_a}__{base_b}.hdf5"
+
+            if frozenset((base_a, base_b)) in skip_pairs:
+                skipped_by_csv += 1
+                continue
             
             if skip_existing and output_path.exists():
                 continue
             tasks_to_run.append((path_a, path_b))
+
+        if skipped_by_csv:
+            print(f"Skipped {skipped_by_csv} pair(s) from skip-pairs CSV.")
 
         if not tasks_to_run:
             print("No new pairs to process.")
@@ -229,18 +285,23 @@ def main():
     parser.add_argument('fragment_dir', type=str, help='Directory containing fragment images')
     parser.add_argument('--model_name', type=str, default="patch-encoder-v0-2-0.ckpt", help='Path to the model checkpoint (.ckpt)')
     parser.add_argument('--output_dir', type=str, default="results", help='Directory to save output results')
-    parser.add_argument('--skip_existing', type=bool, default=True, help='Skip existing output files')
+    parser.add_argument('--skip_existing', type=parse_bool, default=True, help='Skip existing output files')
     parser.add_argument('--num-workers', type=int, default=24, help="Num workers to use")
+    parser.add_argument('--side', choices=["recto", "verso", "both"], default="both", help='Which side to process')
+    parser.add_argument('--skip-pairs-csv', '--ignore-pairs-csv', dest='skip_pairs_csv', type=str, default=None, help='CSV where each row lists fragments whose pairwise combinations should be skipped')
     args = parser.parse_args()
 
     FRAGMENT_DIR = args.fragment_dir
     MODEL_NAME = args.model_name
     OUTPUT_DIR = Path(args.output_dir) / (Path(FRAGMENT_DIR).stem)
     SKIP_EXISTING = args.skip_existing
+    SKIP_PAIRS = load_skip_pairs(args.skip_pairs_csv)
 
     NUM_WORKERS = args.num_workers # Adjust based on your available GPUs/CPU cores
     
-    for side in ["recto", "verso"]:
+    sides = ["recto", "verso"] if args.side == "both" else [args.side]
+
+    for side in sides:
         # Assumes fragments are PNG files. Adjust glob pattern as needed.
         if side == "verso":
             fragment_files = [f for f in glob.glob(f"{FRAGMENT_DIR}/*.png") if "_back" in Path(f).stem.lower()]
@@ -267,7 +328,8 @@ def main():
             matcher.run_all_pairs(
                 fragment_paths=fragment_files,
                 num_workers=NUM_WORKERS,
-                skip_existing=True
+                skip_existing=SKIP_EXISTING,
+                skip_pairs=SKIP_PAIRS
             )
 
 if __name__ == "__main__":
